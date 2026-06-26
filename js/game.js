@@ -7,6 +7,9 @@
 (function () {
   "use strict";
 
+  /* Bump this on every update so the home screen shows the current build. */
+  const VERSION = "1.0.0";
+
   /* ------------------------------------------------------------------ *
    * Config / tuning
    * ------------------------------------------------------------------ */
@@ -1254,6 +1257,10 @@
       startMission(missionIndex + 1);
     }
   });
+
+  // stamp the current version onto the home screen
+  const versionEl = document.getElementById("version");
+  if (versionEl) versionEl.textContent = "v" + VERSION;
 
   // start on menu (or jump straight into a mission via ?mission=N for replay/testing)
   const mq = parseInt(new URLSearchParams(location.search).get("mission"), 10);
