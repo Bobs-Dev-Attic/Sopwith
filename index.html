@@ -50,22 +50,23 @@
     <div id="controls" class="overlay-ui">
       <!-- Left side: pitch arrows -->
       <div class="pad pad-left">
-        <button id="btn-up" class="ctl-btn arrow" aria-label="Climb">▲</button>
-        <button id="btn-down" class="ctl-btn arrow" aria-label="Dive">▼</button>
+        <button id="btn-up" class="ctl-btn arrow" aria-label="Pitch up">▲</button>
+        <button id="btn-down" class="ctl-btn arrow" aria-label="Pitch down">▼</button>
       </div>
 
-      <!-- Middle: throttle slider -->
-      <div class="throttle">
-        <span class="throttle-cap throttle-top">MAX</span>
-        <input id="throttle" class="throttle-slider" type="range" min="0" max="100" value="55"
-               orient="vertical" aria-label="Throttle" />
-        <span class="throttle-cap throttle-bot">IDLE</span>
-      </div>
+      <!-- Right side: weapon buttons, then the power lever pinned to the edge -->
+      <div class="right-cluster">
+        <div class="pad pad-right">
+          <button id="btn-bomb" class="ctl-btn weapon bomb" aria-label="Drop bomb">💣</button>
+          <button id="btn-fire" class="ctl-btn weapon fire" aria-label="Fire guns">🔫</button>
+        </div>
 
-      <!-- Right side: weapon buttons -->
-      <div class="pad pad-right">
-        <button id="btn-bomb" class="ctl-btn weapon bomb" aria-label="Drop bomb">💣</button>
-        <button id="btn-fire" class="ctl-btn weapon fire" aria-label="Fire guns">🔫</button>
+        <div class="throttle">
+          <span class="throttle-cap throttle-top">MAX</span>
+          <input id="throttle" class="throttle-slider" type="range" min="0" max="100" value="55"
+                 orient="vertical" aria-label="Throttle" />
+          <span class="throttle-cap throttle-bot">IDLE</span>
+        </div>
       </div>
     </div>
 
@@ -91,8 +92,9 @@
       <div class="panel">
         <h2>How to Play</h2>
         <ul class="howto-list">
-          <li><span class="key">▲ / ▼</span> Pull up (climb) or nose down (dive)</li>
-          <li><span class="key">Throttle</span> Vertical slider sets your speed</li>
+          <li><span class="key">▲ / ▼</span> Pitch the nose — controls default to joystick-style (inverted): the lower arrow pulls up. Flip it on the menu.</li>
+          <li><span class="key">Loops</span> Hold pitch all the way around for a full loop</li>
+          <li><span class="key">Throttle</span> Power lever on the right sets your speed</li>
           <li><span class="key">🔫</span> Fire your twin Vickers guns at enemy planes</li>
           <li><span class="key">💣</span> Drop bombs on ground targets</li>
           <li><span class="key">Altitude</span> Hug the ground and the camera zooms in; climb high and it zooms out</li>

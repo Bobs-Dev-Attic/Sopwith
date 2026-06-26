@@ -167,6 +167,15 @@ canvas#game {
   align-items: flex-end;
 }
 
+/* Weapons + power lever grouped on the right; the lever stays pinned to the
+   right edge of the screen regardless of the in-game zoom level. */
+.right-cluster {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  pointer-events: none;
+}
+
 .ctl-btn {
   pointer-events: auto;
   border: none;
