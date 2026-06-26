@@ -8,7 +8,7 @@
   "use strict";
 
   /* Bump this on every update so the home screen shows the current build. */
-  const VERSION = "1.5.0";
+  const VERSION = "1.6.0";
 
   /* ------------------------------------------------------------------ *
    * Config / tuning
@@ -67,6 +67,14 @@
     if (a > 180) a -= 360;
     if (a <= -180) a += 360;
     return a;
+  };
+  // deterministic hash -> [0,1): stable pseudo-random keyed by an integer, so
+  // procedural scenery scrolls with the world instead of flickering each frame
+  const hash = (n) => {
+    n = Math.imul(n ^ (n >>> 15), 0x2c1b3c6d);
+    n = Math.imul(n ^ (n >>> 12), 0x297a2d39);
+    n = n ^ (n >>> 15);
+    return (n >>> 0) / 4294967296;
   };
 
   /* ------------------------------------------------------------------ *
@@ -927,8 +935,11 @@
     const alt = Math.max(0, -player.y);
     drawSky(alt);
     drawHills();
+    drawTreeline();
+    drawSmokeColumns();
     drawClouds();
     drawGround();
+    drawBattlefield();
     drawTargets();
     drawBombs();
     drawEnemies();
@@ -939,24 +950,120 @@
     if (state === STATE.PLAY) updateHUD(alt);
   }
 
+  const sunPos = () => ({ x: VW * 0.78, y: VH * 0.2 });
+
   function drawSky(alt) {
     const t = clamp(alt / CFG.MAX_ALT, 0, 1);
+    const rgb = (r, g, b) => `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
     const g = ctx.createLinearGradient(0, 0, 0, VH);
-    // higher = deeper blue
-    const top = lerp(0x6db3d6 >> 16 & 255, 0x1c4a73 >> 16 & 255, t);
-    g.addColorStop(0, `rgb(${Math.round(lerp(70, 24, t))},${Math.round(lerp(140, 70, t))},${Math.round(lerp(190, 120, t))})`);
-    g.addColorStop(0.7, `rgb(${Math.round(lerp(150, 90, t))},${Math.round(lerp(200, 150, t))},${Math.round(lerp(225, 190, t))})`);
-    g.addColorStop(1, `rgb(${Math.round(lerp(205, 150, t))},${Math.round(lerp(225, 195, t))},${Math.round(lerp(230, 210, t))})`);
+    // a hazy, overcast war sky: muted blue-grey up high, smoky warm glow near
+    // the horizon. Deepens as you climb.
+    g.addColorStop(0, rgb(lerp(96, 26, t), lerp(122, 56, t), lerp(150, 92, t)));
+    g.addColorStop(0.5, rgb(lerp(150, 92, t), lerp(164, 120, t), lerp(180, 150, t)));
+    g.addColorStop(0.8, rgb(lerp(206, 150, t), lerp(196, 150, t), lerp(182, 150, t)));
+    g.addColorStop(1, rgb(lerp(236, 158, t), lerp(202, 146, t), lerp(156, 120, t)));
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, VW, VH);
 
-    // sun
+    const s = sunPos();
+    // soft sun glow
+    const rg = ctx.createRadialGradient(s.x, s.y, 4, s.x, s.y, VW * 0.55);
+    rg.addColorStop(0, `rgba(255,242,205,${0.6 * (1 - t * 0.5)})`);
+    rg.addColorStop(0.16, "rgba(255,228,170,0.22)");
+    rg.addColorStop(1, "rgba(255,228,170,0)");
+    ctx.fillStyle = rg;
+    ctx.fillRect(0, 0, VW, VH);
+
+    // crepuscular "god rays" fanning down from the sun
     ctx.save();
-    ctx.globalAlpha = 0.8;
-    ctx.fillStyle = "rgba(255,245,200,0.9)";
+    ctx.globalCompositeOperation = "lighter";
+    const rays = 8;
+    const drift = Math.sin(now() * 0.06) * 0.03;
+    for (let i = 0; i < rays; i++) {
+      const ang = Math.PI * 0.52 + (i - rays / 2) * 0.15 + drift + (hash(i) - 0.5) * 0.05;
+      const len = VH * 1.4;
+      const w = 0.045 + hash(i * 7) * 0.02;
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(s.x + Math.cos(ang - w) * len, s.y + Math.sin(ang - w) * len);
+      ctx.lineTo(s.x + Math.cos(ang + w) * len, s.y + Math.sin(ang + w) * len);
+      ctx.closePath();
+      ctx.fillStyle = `rgba(255,238,194,${0.05 * (1 - t * 0.6)})`;
+      ctx.fill();
+    }
+    ctx.restore();
+
+    // wan sun disc
+    ctx.save();
+    ctx.fillStyle = "rgba(255,248,222,0.95)";
     ctx.beginPath();
-    ctx.arc(VW * 0.82, VH * 0.18, 34, 0, TAU);
+    ctx.arc(s.x, s.y, 30, 0, TAU);
     ctx.fill();
+    ctx.restore();
+  }
+
+  // A shattered treeline silhouette along the horizon (parallax with the ridge).
+  function drawTreeline() {
+    const horizon = worldToScreen(0, 0).y;
+    if (horizon > VH + 30) return;
+    const par = 0.5 * cam.zoom;
+    const spacing = 46;
+    const left = cam.x + (-60 - VW * 0.4) / par;
+    const right = cam.x + (VW + 60 - VW * 0.4) / par;
+    ctx.save();
+    ctx.strokeStyle = "rgba(28,32,30,0.6)";
+    ctx.fillStyle = "rgba(28,32,30,0.55)";
+    for (let c = Math.floor(left / spacing); c <= Math.ceil(right / spacing); c++) {
+      const h = hash(c * 13 + 5);
+      if (h < 0.45) continue; // sparse, broken stumps
+      const wx = c * spacing + (hash(c * 31) - 0.5) * spacing * 0.6;
+      const sx = (wx - cam.x) * par + VW * 0.4;
+      const th = (10 + hash(c * 17) * 22) * cam.zoom; // trunk height
+      const lean = (hash(c * 5) - 0.5) * 4 * cam.zoom;
+      ctx.lineWidth = Math.max(1, 1.6 * cam.zoom);
+      ctx.beginPath();
+      ctx.moveTo(sx, horizon);
+      ctx.lineTo(sx + lean, horizon - th);
+      ctx.stroke();
+      // a couple of broken branch stubs
+      if (h > 0.7) {
+        ctx.beginPath();
+        ctx.moveTo(sx + lean * 0.6, horizon - th * 0.6);
+        ctx.lineTo(sx + lean * 0.6 + 4 * cam.zoom, horizon - th * 0.72);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  // Distant battlefield smoke columns rising from the horizon.
+  function drawSmokeColumns() {
+    const horizon = worldToScreen(0, 0).y;
+    if (horizon > VH + 20) return;
+    const par = 0.34 * cam.zoom;
+    const spacing = 560;
+    const left = cam.x + (-120 - VW * 0.4) / par;
+    const right = cam.x + (VW + 120 - VW * 0.4) / par;
+    const T = now();
+    ctx.save();
+    for (let c = Math.floor(left / spacing); c <= Math.ceil(right / spacing); c++) {
+      if (hash(c * 91 + 3) < 0.55) continue; // sparse
+      const wx = c * spacing + (hash(c * 7) - 0.5) * spacing * 0.7;
+      const sx = (wx - cam.x) * par + VW * 0.4;
+      if (sx < -120 || sx > VW + 120) continue;
+      const tall = (50 + hash(c * 23) * 90) * cam.zoom;
+      const puffs = 7;
+      for (let i = 0; i < puffs; i++) {
+        const f = i / puffs;
+        const drift = Math.sin(T * 0.3 + c + i * 0.5) * (6 + i * 2.2) * cam.zoom;
+        const py = horizon - f * tall;
+        const pr = (4 + i * 2.4) * cam.zoom;
+        ctx.fillStyle = `rgba(${60 - i * 4},${58 - i * 4},${60 - i * 3},${0.30 * (1 - f)})`;
+        ctx.beginPath();
+        ctx.arc(sx + drift, py, pr, 0, TAU);
+        ctx.fill();
+      }
+    }
     ctx.restore();
   }
 
@@ -1020,12 +1127,29 @@
   function drawGround() {
     const horizon = worldToScreen(0, 0).y;
     if (horizon > VH) return;
-    // grass field
+    // churned, war-worn field — green near the aerodrome, muddier downrange
     const g = ctx.createLinearGradient(0, horizon, 0, VH);
-    g.addColorStop(0, "#6fa84a");
-    g.addColorStop(1, "#3c6b2c");
+    g.addColorStop(0, "#6a9a48");
+    g.addColorStop(0.5, "#557e38");
+    g.addColorStop(1, "#3a5b2a");
     ctx.fillStyle = g;
     ctx.fillRect(0, horizon, VW, VH - horizon);
+
+    // mud / shell-churn patches scattered across the field
+    const mudSpacing = 120;
+    const mLeft = cam.x - VW / cam.zoom;
+    for (let c = Math.floor(mLeft / mudSpacing); c < (cam.x + VW / cam.zoom) / mudSpacing; c++) {
+      const h = hash(c * 41 + 9);
+      if (h < 0.4) continue;
+      const wx = c * mudSpacing + (hash(c * 3) - 0.5) * mudSpacing;
+      const s = worldToScreen(wx, 0);
+      if (s.x < -120 || s.x > VW + 120) continue;
+      const w = (24 + hash(c * 5) * 46) * cam.zoom;
+      ctx.fillStyle = `rgba(74,58,38,${0.16 + h * 0.16})`;
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y + (6 + hash(c * 11) * 16) * cam.zoom, w, w * 0.4, 0, 0, TAU);
+      ctx.fill();
+    }
 
     // runway near origin (the aerodrome)
     drawRunway(horizon);
@@ -1063,6 +1187,147 @@
     ctx.lineTo(b.x, horizon + 5 * cam.zoom);
     ctx.stroke();
     ctx.restore();
+  }
+
+  // Procedural battlefield scenery on the ground: craters, sandbag trenches,
+  // splintered trees, barbed wire and fires. World-locked and zoom-scaled, and
+  // suppressed over the friendly aerodrome so the runway stays clear.
+  function drawBattlefield() {
+    const horizon = worldToScreen(0, 0).y;
+    if (horizon > VH + 40) return;
+    const z = cam.zoom;
+    const spacing = 150;
+    const left = cam.x - VW / z;
+    const right = cam.x + VW / z;
+    const T = now();
+    for (let c = Math.floor(left / spacing); c <= Math.ceil(right / spacing); c++) {
+      const wx = c * spacing + (hash(c * 19) - 0.5) * spacing * 0.7;
+      if (wx > -520 && wx < 520) continue; // keep the aerodrome clear
+      const s = worldToScreen(wx, 0);
+      if (s.x < -160 || s.x > VW + 160) continue;
+      const pick = hash(c * 101 + 7);
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      if (pick < 0.26) fCrater(z, hash(c * 2));
+      else if (pick < 0.46) fTrench(z, hash(c * 9));
+      else if (pick < 0.66) fDeadTree(z, hash(c * 6), hash(c * 15));
+      else if (pick < 0.78) fWire(z);
+      else if (pick < 0.85) fFire(z, c, T);
+      // else: bare, churned ground
+      ctx.restore();
+    }
+  }
+
+  function fCrater(z, seed) {
+    const w = (34 + seed * 40) * z;
+    ctx.fillStyle = "rgba(58,46,32,0.55)";
+    ctx.beginPath();
+    ctx.ellipse(0, 3 * z, w, 8 * z, 0, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = "rgba(34,27,18,0.6)";
+    ctx.beginPath();
+    ctx.ellipse(0, 3 * z, w * 0.66, 5 * z, 0, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(96,80,54,0.5)";
+    ctx.lineWidth = 1.4 * z;
+    ctx.beginPath();
+    ctx.ellipse(0, 1.5 * z, w, 8 * z, 0, Math.PI * 1.04, Math.PI * 1.96);
+    ctx.stroke();
+  }
+
+  function fTrench(z, seed) {
+    // a low sandbag parapet with a dark trench gap and a wooden post
+    const n = 4 + Math.floor(seed * 3);
+    ctx.fillStyle = "rgba(20,18,14,0.55)";
+    ctx.fillRect(-6 * z, -2 * z, 12 * z, 12 * z); // trench mouth
+    for (let i = 0; i < n; i++) {
+      const bx = (-n / 2 + i) * 11 * z;
+      ctx.fillStyle = i % 2 ? "#7d6e4c" : "#8b7c58";
+      ctx.beginPath();
+      ctx.ellipse(bx, -3 * z, 6.5 * z, 4.5 * z, 0, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(40,33,22,0.5)";
+      ctx.lineWidth = 0.8 * z;
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#5a4327";
+    ctx.fillRect(-1.2 * z, -16 * z, 2.4 * z, 14 * z); // revetment post
+  }
+
+  function fDeadTree(z, seed, seed2) {
+    const h = (26 + seed * 30) * z;
+    const lean = (seed2 - 0.5) * 7 * z;
+    ctx.strokeStyle = "#3a3026";
+    ctx.lineCap = "round";
+    ctx.lineWidth = 2.4 * z;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(lean * 0.5, -h * 0.6, lean, -h); // splintered, leaning trunk
+    ctx.stroke();
+    // a few broken limbs
+    ctx.lineWidth = 1.4 * z;
+    const limbs = 2 + Math.floor(seed * 2);
+    for (let i = 0; i < limbs; i++) {
+      const ly = -h * (0.4 + 0.5 * (i / limbs));
+      const dir = i % 2 ? 1 : -1;
+      ctx.beginPath();
+      ctx.moveTo(lean * (0.4 + 0.5 * (i / limbs)), ly);
+      ctx.lineTo(lean * 0.5 + dir * (7 + seed * 6) * z, ly - (3 + seed * 4) * z);
+      ctx.stroke();
+    }
+  }
+
+  function fWire(z) {
+    // posts with sagging barbed wire
+    ctx.strokeStyle = "#4a4034";
+    ctx.lineWidth = 1.6 * z;
+    const span = 26 * z;
+    for (const px of [-span / 2, span / 2]) {
+      ctx.beginPath();
+      ctx.moveTo(px, 0);
+      ctx.lineTo(px, -10 * z);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = "rgba(70,64,54,0.85)";
+    ctx.lineWidth = 0.8 * z;
+    for (const yy of [-8 * z, -4 * z]) {
+      ctx.beginPath();
+      ctx.moveTo(-span / 2, yy);
+      ctx.quadraticCurveTo(0, yy + 4 * z, span / 2, yy);
+      ctx.stroke();
+    }
+    // barbs
+    ctx.fillStyle = "rgba(70,64,54,0.85)";
+    for (let i = -2; i <= 2; i++) {
+      ctx.fillRect(i * 5 * z - 0.5 * z, -6.5 * z, 1 * z, 3 * z);
+    }
+  }
+
+  function fFire(z, c, T) {
+    const flick = 0.7 + 0.3 * Math.sin(T * 9 + c);
+    // glow
+    ctx.fillStyle = `rgba(255,150,60,${0.18 * flick})`;
+    ctx.beginPath();
+    ctx.ellipse(0, -4 * z, 16 * z, 12 * z, 0, 0, TAU);
+    ctx.fill();
+    // flames
+    for (let i = -1; i <= 1; i++) {
+      const fh = (12 + (i === 0 ? 8 : 0)) * z * flick;
+      ctx.fillStyle = i === 0 ? "#ffd24a" : "#ff7a33";
+      ctx.beginPath();
+      ctx.moveTo(i * 4 * z - 3 * z, 0);
+      ctx.quadraticCurveTo(i * 4 * z, -fh, i * 4 * z + 1 * z, 0);
+      ctx.closePath();
+      ctx.fill();
+    }
+    // rising smoke
+    for (let i = 0; i < 4; i++) {
+      const f = i / 4;
+      ctx.fillStyle = `rgba(40,38,38,${0.28 * (1 - f)})`;
+      ctx.beginPath();
+      ctx.arc(Math.sin(T * 0.8 + i) * 4 * z, -(14 + i * 9) * z, (3 + i * 2) * z, 0, TAU);
+      ctx.fill();
+    }
   }
 
   function drawTargets() {
