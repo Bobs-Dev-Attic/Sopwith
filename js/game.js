@@ -8,7 +8,7 @@
   "use strict";
 
   /* Bump this on every update so the home screen shows the current build. */
-  const VERSION = "1.0.0";
+  const VERSION = "1.1.0";
 
   /* ------------------------------------------------------------------ *
    * Config / tuning
@@ -19,18 +19,20 @@
     CRUISE_SPEED: 165,
     MAX_SPEED: 300,
     SPEED_EASE: 2.2, // how fast speed follows throttle
-    PITCH_RATE: 110, // deg/sec while holding an arrow
-    PITCH_MAX: 78, // deg
-    AUTO_LEVEL: 26, // deg/sec gentle return to level when no input
+    PITCH_RATE: 130, // deg/sec while holding an arrow (brisk enough to loop)
+    AUTO_LEVEL: 22, // deg/sec gentle return to level when near level & hands-off
     GRAVITY: 150, // downward sag when below cruise speed
     CRASH_VY: 230, // vertical speed into ground that hurts
+    DRAG: 30, // speed bleed that grows with altitude (thin air)
+    POWER_FADE: 0.55, // fraction of engine thrust lost at the ceiling
+    CEILING_BAND: 380, // ft below MAX_ALT where climb authority fades out
 
     // Altitude -> zoom mapping
     ZOOM_GROUND: 1.7,
-    ZOOM_SKY: 0.6,
+    ZOOM_SKY: 0.34, // more zoomed out at altitude -> more of the scene visible
     ZOOM_ALT_RANGE: 1500, // alt at which we reach full zoom-out
     ZOOM_EASE: 2.4,
-    MAX_ALT: 2200,
+    MAX_ALT: 2400,
 
     // Weapons
     FIRE_RATE: 0.11, // sec between bullets
@@ -53,6 +55,13 @@
   const rand = (a, b) => a + Math.random() * (b - a);
   const randi = (a, b) => Math.floor(rand(a, b + 1));
   const now = () => performance.now() / 1000;
+  // normalize an angle (deg) to (-180, 180]
+  const normDeg = (a) => {
+    a = a % 360;
+    if (a > 180) a -= 360;
+    if (a <= -180) a += 360;
+    return a;
+  };
 
   /* ------------------------------------------------------------------ *
    * Canvas
@@ -85,7 +94,7 @@
     pitchDown: false,
     firing: false,
     throttle: 0.55,
-    invert: false,
+    invert: true, // inverted (joystick-style: lower arrow pulls the nose up) by default
     bombQueued: false,
   };
 
@@ -160,6 +169,7 @@
   });
 
   const invertChk = document.getElementById("invert-pitch");
+  invertChk.checked = input.invert; // reflect the default on the menu toggle
   invertChk.addEventListener("change", () => (input.invert = invertChk.checked));
 
   /* ------------------------------------------------------------------ *
@@ -471,7 +481,10 @@
     const p = player;
     if (p.invuln > 0) p.invuln -= dt;
 
-    // ---- pitch control ----
+    const altNow = Math.max(0, -p.y);
+    const altFactor = clamp(altNow / CFG.MAX_ALT, 0, 1);
+
+    // ---- pitch control (full 360° loops allowed) ----
     let up = input.pitchUp;
     let down = input.pitchDown;
     if (input.invert) {
@@ -480,35 +493,48 @@
     if (up) p.pitch += CFG.PITCH_RATE * dt;
     else if (down) p.pitch -= CFG.PITCH_RATE * dt;
     else {
-      // gentle auto-level
-      if (Math.abs(p.pitch) < CFG.AUTO_LEVEL * dt) p.pitch = 0;
-      else p.pitch -= Math.sign(p.pitch) * CFG.AUTO_LEVEL * dt;
+      // gentle auto-level, but only near a level attitude so it never
+      // fights the pilot through the top of a loop
+      if (Math.abs(p.pitch) < 45) {
+        if (Math.abs(p.pitch) < CFG.AUTO_LEVEL * dt) p.pitch = 0;
+        else p.pitch -= Math.sign(p.pitch) * CFG.AUTO_LEVEL * dt;
+      }
     }
-    p.pitch = clamp(p.pitch, -CFG.PITCH_MAX, CFG.PITCH_MAX);
+    p.pitch = normDeg(p.pitch); // wrap so the nose can swing all the way around
+    const pr = p.pitch * DEG;
 
-    // ---- speed from throttle ----
-    const target = CFG.STALL_SPEED + input.throttle * (CFG.MAX_SPEED - CFG.STALL_SPEED);
+    // ---- speed from throttle, with altitude power-fade + drag ----
+    const powerScale = 1 - CFG.POWER_FADE * altFactor; // thinner air, less thrust
+    const target = CFG.STALL_SPEED + input.throttle * (CFG.MAX_SPEED - CFG.STALL_SPEED) * powerScale;
     p.speed += (target - p.speed) * clamp(CFG.SPEED_EASE * dt, 0, 1);
+    // aerodynamic drag that bites harder the higher you are
+    p.speed -= CFG.DRAG * altFactor * (p.speed / CFG.CRUISE_SPEED) * dt;
+    if (p.speed < 0) p.speed = 0;
 
     // ---- velocity ----
-    const pr = p.pitch * DEG;
     let vx = p.speed * Math.cos(pr);
     let vy = -p.speed * Math.sin(pr);
     // gravity sag when below cruise speed (stall)
     const sag = CFG.GRAVITY * Math.max(0, 1 - p.speed / CFG.CRUISE_SPEED);
     vy += sag;
+    // soft service ceiling: climb authority fades out in the top band so the
+    // plane settles at its limit instead of slamming into a hard clamp
+    if (vy < 0) {
+      const ceilDamp = clamp((CFG.MAX_ALT - altNow) / CFG.CEILING_BAND, 0, 1);
+      vy *= ceilDamp;
+    }
 
     p.x += vx * dt;
     p.y += vy * dt;
 
-    // ---- altitude clamp / ground interaction ----
+    // ---- ground interaction ----
     const alt = -p.y;
     p.onGround = false;
     if (alt <= 0) {
       p.y = 0;
       p.onGround = true;
       const descending = vy;
-      const tooSteep = p.pitch < -18;
+      const tooSteep = p.pitch < -18 || Math.abs(p.pitch) > 100; // nose-down or inverted into the dirt
       if ((descending > CFG.CRASH_VY || tooSteep) && p.invuln <= 0) {
         damagePlayer(40, true);
         // bounce the nose up so we don't insta-die
@@ -1051,91 +1077,165 @@
     if (!blink) drawPlane(s.x, s.y, player.pitch, 1, cam.zoom, false, player.hp);
   }
 
-  /* The Sopwith Camel (and enemy Fokker) — drawn as a vector biplane. */
-  function drawPlane(sx, sy, pitchDeg, dir, z, enemy, hp) {
+  /* A detailed side-view biplane modelled on the Sopwith Camel B6313:
+     silver rotary cowl, wooden prop, PC10 khaki airframe, RAF roundels and a
+     blue/white/red striped rudder. Enemies reuse the shape in red with crosses.
+     Drawn in fixed "model units"; the context is scaled by the camera zoom so
+     line weights and detail scale naturally. Nose points +x (right). */
+  function drawPlane(sx, sy, pitchDeg, dir, zoom, enemy, hp) {
     ctx.save();
     ctx.translate(sx, sy);
-    // dir = 1 faces right, -1 faces left. pitch positive = nose up.
-    ctx.scale(dir, 1);
-    ctx.rotate(-pitchDeg * DEG * dir);
-    z = z * 1.0;
+    ctx.scale(dir, 1); // face left/right
+    ctx.rotate(-pitchDeg * DEG * dir); // pitch — any angle, so full loops read right
+    const s = zoom * 0.9;
+    ctx.scale(s, s);
+    ctx.lineJoin = "round";
 
-    const body = enemy ? "#a8362c" : "#6f7d3f";
-    const bodyDark = enemy ? "#7e261d" : "#535e2c";
-    const wing = enemy ? "#c24536" : "#86934a";
+    const P = enemy
+      ? { body: "#a83a2e", bodyDk: "#7d271d", wing: "#b04035", wingDk: "#822c22",
+          cowl: "#5d5d61", cowlHi: "#86868a", prop: "#6f5230", strut: "#43291d" }
+      : { body: "#736c3b", bodyDk: "#544e29", wing: "#7c7647", wingDk: "#565132",
+          cowl: "#b9bdc1", cowlHi: "#e2e6e9", prop: "#9c6b34", strut: "#5a4327" };
+    const line = "rgba(20,18,12,0.5)";
 
-    // --- propeller blur ---
-    ctx.fillStyle = "rgba(40,40,40,0.45)";
+    // ---- horizontal stabilizer ----
+    ctx.fillStyle = P.wingDk;
     ctx.beginPath();
-    ctx.ellipse(20 * z, 0, 3 * z, 13 * z, 0, 0, TAU);
-    ctx.fill();
+    ctx.moveTo(-21, -1); ctx.lineTo(-34, -3.2); ctx.lineTo(-34, 2.4); ctx.lineTo(-21, 2);
+    ctx.closePath(); ctx.fill();
 
-    // --- lower wing ---
-    ctx.fillStyle = wing;
-    ctx.fillRect(-15 * z, 6 * z, 34 * z, 4 * z);
-    // --- upper wing ---
-    ctx.fillRect(-17 * z, -13 * z, 38 * z, 4 * z);
-    // --- struts ---
-    ctx.strokeStyle = bodyDark;
-    ctx.lineWidth = 1.4 * z;
+    // ---- vertical fin + rudder (tricolor for the Camel) ----
     ctx.beginPath();
-    ctx.moveTo(-12 * z, -9 * z); ctx.lineTo(-12 * z, 6 * z);
-    ctx.moveTo(14 * z, -9 * z); ctx.lineTo(14 * z, 6 * z);
+    ctx.moveTo(-24, 2.2);
+    ctx.lineTo(-25.5, -11);
+    ctx.quadraticCurveTo(-29, -13, -32, -10.5);
+    ctx.lineTo(-34, 2.2);
+    ctx.closePath();
+    if (enemy) {
+      ctx.fillStyle = P.bodyDk; ctx.fill();
+    } else {
+      ctx.save(); ctx.clip();
+      ctx.fillStyle = "#f4f4f4"; ctx.fillRect(-35, -14, 13, 18); // white base
+      ctx.fillStyle = "#11317a"; ctx.fillRect(-27, -14, 5, 18); // blue, fuselage side
+      ctx.fillStyle = "#c8102e"; ctx.fillRect(-35, -14, 3.4, 18); // red, trailing edge
+      ctx.restore();
+    }
+    ctx.lineWidth = 0.5; ctx.strokeStyle = line; ctx.stroke();
+
+    // ---- lower wing ----
+    roundRect(-14, 5.4, 30, 2.7, 1.2); ctx.fillStyle = P.wing; ctx.fill();
+    ctx.fillStyle = "rgba(0,0,0,0.12)"; ctx.fillRect(-14, 7.4, 30, 0.7);
+
+    // ---- landing gear ----
+    ctx.lineCap = "round";
+    ctx.strokeStyle = P.strut; ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(-1, 5); ctx.lineTo(1.5, 14);
+    ctx.moveTo(9, 5); ctx.lineTo(5, 14);
+    ctx.stroke();
+    ctx.strokeStyle = "#2a2a2a"; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(0.5, 14); ctx.lineTo(6, 14); ctx.stroke(); // axle
+    ctx.fillStyle = "#1c1c1c"; circle(3.2, 14.2, 3.6); // tyre
+    ctx.fillStyle = "#7d7f82"; circle(3.2, 14.2, 1.5); // hub
+
+    // ---- fuselage ----
+    ctx.beginPath();
+    ctx.moveTo(-24, -2);
+    ctx.lineTo(-4, -5);
+    ctx.lineTo(8, -5);
+    ctx.lineTo(13, -3.6);
+    ctx.lineTo(13.5, 5);
+    ctx.lineTo(-24, 2.2);
+    ctx.closePath();
+    ctx.fillStyle = P.body; ctx.fill();
+    ctx.fillStyle = "rgba(0,0,0,0.14)"; ctx.fillRect(-24, 1.2, 37.5, 1.1); // belly shadow
+    ctx.lineWidth = 0.5; ctx.strokeStyle = line; ctx.stroke();
+
+    // ---- cowl (rotary engine cowling) ----
+    ctx.fillStyle = P.cowl;
+    ctx.beginPath(); ctx.ellipse(15.5, 0, 5, 6.1, 0, 0, TAU); ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.35)"; ctx.lineWidth = 0.6;
+    ctx.beginPath(); ctx.ellipse(16.5, 0, 3.7, 5, 0, 0, TAU); ctx.stroke();
+    ctx.fillStyle = "rgba(0,0,0,0.30)";
+    ctx.beginPath(); ctx.ellipse(17, 0, 2.6, 3.8, 0, 0, TAU); ctx.fill();
+    ctx.fillStyle = P.cowlHi;
+    ctx.beginPath(); ctx.ellipse(13.6, -2, 1.4, 2.6, 0, 0, TAU); ctx.fill();
+
+    // ---- propeller ----
+    ctx.fillStyle = "rgba(120,90,50,0.22)"; // motion blur
+    ctx.beginPath(); ctx.ellipse(20.5, 0, 2.8, 7.6, 0, 0, TAU); ctx.fill();
+    ctx.fillStyle = P.prop; // wooden blade
+    ctx.beginPath(); ctx.ellipse(20.5, 0, 1.15, 7.2, 0, 0, TAU); ctx.fill();
+    ctx.fillStyle = "rgba(255,235,200,0.5)";
+    ctx.beginPath(); ctx.ellipse(20.2, -3, 0.5, 2.2, 0, 0, TAU); ctx.fill();
+
+    // ---- cabane + interplane struts ----
+    ctx.strokeStyle = P.strut; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-11, -10.5); ctx.lineTo(-11, 5.6); // rear interplane strut
+    ctx.moveTo(12, -10.5); ctx.lineTo(12, 5.6); // front interplane strut
+    ctx.moveTo(-1, -5); ctx.lineTo(0, -11); // cabane
+    ctx.moveTo(4, -5); ctx.lineTo(4, -11);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(230,230,230,0.35)"; ctx.lineWidth = 0.4; // rigging wires
+    ctx.beginPath();
+    ctx.moveTo(-11, 5.6); ctx.lineTo(12, -10.5);
+    ctx.moveTo(12, 5.6); ctx.lineTo(-11, -10.5);
     ctx.stroke();
 
-    // --- fuselage ---
-    ctx.fillStyle = body;
-    ctx.beginPath();
-    ctx.moveTo(-22 * z, 0);
-    ctx.lineTo(-14 * z, -5 * z);
-    ctx.lineTo(16 * z, -4 * z);
-    ctx.lineTo(20 * z, 0);
-    ctx.lineTo(16 * z, 4 * z);
-    ctx.lineTo(-14 * z, 4 * z);
-    ctx.closePath();
-    ctx.fill();
+    // ---- upper wing ----
+    roundRect(-16, -13.6, 33, 3, 1.4); ctx.fillStyle = P.wing; ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.10)"; ctx.fillRect(-16, -13.6, 33, 0.7);
+    ctx.fillStyle = "rgba(0,0,0,0.14)"; ctx.fillRect(-16, -11.3, 33, 0.6);
 
-    // --- tail ---
-    ctx.fillStyle = bodyDark;
-    ctx.beginPath();
-    ctx.moveTo(-22 * z, 0);
-    ctx.lineTo(-30 * z, -8 * z);
-    ctx.lineTo(-22 * z, -2 * z);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillRect(-30 * z, -1 * z, 9 * z, 3 * z);
+    // ---- cockpit + pilot ----
+    ctx.fillStyle = "#241f17";
+    ctx.beginPath(); ctx.ellipse(-3, -5, 2.3, 1.9, 0, 0, TAU); ctx.fill();
+    ctx.fillStyle = "#6b4a32"; circle(-3, -5.7, 1.3); // head
+    ctx.fillStyle = "#1a1a1a"; ctx.fillRect(-4.2, -6.1, 2.4, 0.7); // helmet/goggles
 
-    // --- cockpit ---
-    ctx.fillStyle = "#2a2a22";
-    ctx.beginPath();
-    ctx.arc(0, -4 * z, 3 * z, 0, TAU);
-    ctx.fill();
-
-    // --- roundel / cross marking ---
+    // ---- national markings ----
     if (enemy) {
-      ctx.strokeStyle = "#1a1a1a";
-      ctx.lineWidth = 2 * z;
-      ctx.beginPath();
-      ctx.moveTo(-4 * z, -13 * z); ctx.lineTo(4 * z, -9 * z);
-      ctx.moveTo(4 * z, -13 * z); ctx.lineTo(-4 * z, -9 * z);
-      ctx.stroke();
+      drawCross(-7, 0, 3); // fuselage
+      drawCross(1, -12.1, 3); // upper wing
     } else {
-      // RAF-style roundel on the upper wing
-      ctx.fillStyle = "#0a2a6b";
-      circle(2 * z, -11 * z, 3 * z);
-      ctx.fillStyle = "#fff";
-      circle(2 * z, -11 * z, 2 * z);
-      ctx.fillStyle = "#c8102e";
-      circle(2 * z, -11 * z, 1 * z);
+      drawRoundel(-7, 0, 2.7); // fuselage
+      drawRoundel(1, -12.1, 2.5); // upper wing
     }
 
     ctx.restore();
+  }
+
+  function drawRoundel(x, y, r) {
+    ctx.fillStyle = "#11317a"; circle(x, y, r);
+    ctx.fillStyle = "#f4f4f4"; circle(x, y, r * 0.62);
+    ctx.fillStyle = "#c8102e"; circle(x, y, r * 0.3);
+  }
+
+  function drawCross(x, y, r) {
+    ctx.fillStyle = "#f0f0f0";
+    ctx.fillRect(x - r, y - r * 0.34, 2 * r, r * 0.68);
+    ctx.fillRect(x - r * 0.34, y - r, r * 0.68, 2 * r);
+    ctx.fillStyle = "#141414";
+    const i = r * 0.66;
+    ctx.fillRect(x - i, y - i * 0.34, 2 * i, i * 0.68);
+    ctx.fillRect(x - i * 0.34, y - i, i * 0.68, 2 * i);
   }
 
   function circle(x, y, r) {
     ctx.beginPath();
     ctx.arc(x, y, r, 0, TAU);
     ctx.fill();
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
   }
 
   function drawParticles() {
