@@ -8,7 +8,7 @@
   "use strict";
 
   /* Bump this on every update so the home screen shows the current build. */
-  const VERSION = "1.7.0";
+  const VERSION = "1.8.0";
 
   /* ------------------------------------------------------------------ *
    * Config / tuning
@@ -26,7 +26,7 @@
     DRAG: 30, // speed bleed that grows with altitude (thin air)
     POWER_FADE: 0.55, // fraction of engine thrust lost at the ceiling
     CEILING_BAND: 380, // ft below MAX_ALT where climb authority fades out
-    TURN_RATE: 5.5, // how fast the plane banks around when reversing direction
+    ROLL_RATE: 9, // how fast the plane rolls upright/inverted about its long axis
     ENEMY_PITCH_MAX: 55, // enemies pitch hard but don't loop
     ENEMY_SPEED_SCALE: 0.82, // enemies fly a bit slower than the player
     ENEMY_GRACE: 10, // seconds of clear sky before enemy planes show up
@@ -236,9 +236,10 @@
   const player = {
     x: 0,
     y: -40,
-    pitch: 0,
-    dir: 1, // committed facing direction: +1 right, -1 left
-    bankX: 1, // animated horizontal scale (-1..1): banks through 0 when turning
+    pitch: 0, // heading in the vertical plane (loops fully); also sets travel direction
+    rollFlip: 1, // +1 upright, -1 rolled upside-down (about the long axis)
+    rollAnim: 1, // eased toward rollFlip; the rendered vertical scale (rolls through 0)
+    rollLatch: false, // edge-detect so a held stick rolls once, not continuously
     speed: CFG.CRUISE_SPEED,
     hp: CFG.PLAYER_HP,
     alive: true,
@@ -468,8 +469,9 @@
     player.x = 0;
     player.y = -8;
     player.pitch = 0;
-    player.dir = 1;
-    player.bankX = 1;
+    player.rollFlip = 1;
+    player.rollAnim = 1;
+    player.rollLatch = false;
     player.speed = CFG.STALL_SPEED + 20;
     player.hp = CFG.PLAYER_HP;
     player.alive = true;
@@ -562,13 +564,17 @@
     p.pitch = normDeg(p.pitch); // wrap so the nose can swing all the way around
     const pr = p.pitch * DEG;
 
-    // push the stick left/right to roll into a banking turn (the plane rotates
-    // about its long axis and comes around to the new heading — it doesn't just
-    // mirror). bankX animates from the old facing through 0 (knife-edge) to the
-    // new one; the renderer squashes it vertically through the roll.
-    if (input.stickX > 0.5) p.dir = 1;
-    else if (input.stickX < -0.5) p.dir = -1;
-    p.bankX += (p.dir - p.bankX) * clamp(CFG.TURN_RATE * dt, 0, 1);
+    // stick left/right rolls the plane about its long axis (a barrel roll):
+    // it flips upside-down <-> right-side-up but keeps flying the same way.
+    // Reversing course is done by looping (pitch), which leaves you inverted —
+    // then a roll brings you upright again. Edge-detected so a held stick rolls
+    // once. rollAnim eases through 0 (knife-edge) for the roll animation.
+    if (Math.abs(input.stickX) > 0.5) {
+      if (!p.rollLatch) { p.rollFlip = -p.rollFlip; p.rollLatch = true; }
+    } else if (Math.abs(input.stickX) < 0.3) {
+      p.rollLatch = false;
+    }
+    p.rollAnim += (p.rollFlip - p.rollAnim) * clamp(CFG.ROLL_RATE * dt, 0, 1);
 
     // ---- speed from throttle, with altitude power-fade + drag ----
     const powerScale = 1 - CFG.POWER_FADE * altFactor; // thinner air, less thrust
@@ -578,8 +584,8 @@
     p.speed -= CFG.DRAG * altFactor * (p.speed / CFG.CRUISE_SPEED) * dt;
     if (p.speed < 0) p.speed = 0;
 
-    // ---- velocity (travels in the direction the nose is facing) ----
-    let vx = p.dir * p.speed * Math.cos(pr);
+    // ---- velocity (travels along the nose; loops carry you west and back) ----
+    let vx = p.speed * Math.cos(pr);
     let vy = -p.speed * Math.sin(pr);
     // gravity sag when below cruise speed (stall)
     const sag = CFG.GRAVITY * Math.max(0, 1 - p.speed / CFG.CRUISE_SPEED);
@@ -632,9 +638,10 @@
     const targetZoom = clamp(VH / span, CFG.ZOOM_MIN, CFG.ZOOM_GROUND);
     cam.zoom += (targetZoom - cam.zoom) * clamp(CFG.ZOOM_EASE * dt, 0, 1);
 
-    // follow player, look a little ahead in the direction the plane faces
+    // follow player, look a little ahead in the direction of travel
     const lookAhead = clamp(player.speed * 0.5, 0, 180);
-    const tx = player.x + player.dir * lookAhead;
+    const headX = Math.cos(player.pitch * DEG); // +east / -west
+    const tx = player.x + (Math.abs(headX) < 0.2 ? 0 : Math.sign(headX)) * lookAhead;
     cam.x += (tx - cam.x) * clamp(6 * dt, 0, 1);
 
     // Vertically sit the camera between the plane and the ground (worldY 0),
@@ -642,6 +649,23 @@
     // both the aircraft and the ground on screen together.
     const ty = player.y * 0.5 - 20;
     cam.y += (ty - cam.y) * clamp(4 * dt, 0, 1);
+  }
+
+  // The world-space offset of whichever fuselage side currently points at the
+  // ground (belly when upright, cockpit when rolled inverted). Mirrors the
+  // sprite transform: model point -> rotate(-pitch) -> vertical flip (rollAnim).
+  function planeDownPoint(p) {
+    const pr = p.pitch * DEG;
+    const k = 0.9; // model units -> world units (drawn at zoom * 0.9)
+    const pts = [[0, 6.5], [-2, -6]]; // belly, cockpit (model space)
+    let best = { wx: 0, wy: 0 };
+    let bestWy = -Infinity;
+    for (const [lx, ly] of pts) {
+      const rx = lx * Math.cos(pr) + ly * Math.sin(pr);
+      const ry = (-lx * Math.sin(pr) + ly * Math.cos(pr)) * p.rollAnim;
+      if (ry > bestWy) { bestWy = ry; best = { wx: rx * k, wy: ry * k }; }
+    }
+    return best;
   }
 
   function updateWeapons(dt) {
@@ -652,12 +676,12 @@
     if (input.firing && p.fireCd <= 0 && p.alive) {
       p.fireCd = CFG.FIRE_RATE;
       const pr = p.pitch * DEG;
-      // guns fire along the nose, in the direction the plane is facing
-      const dx = p.dir * Math.cos(pr), dy = -Math.sin(pr);
+      // guns fire straight along the nose (roll doesn't change where they point)
+      const dx = Math.cos(pr), dy = -Math.sin(pr);
       const nx = p.x + dx * 22, ny = p.y + dy * 22;
       bullets.push({
         x: nx, y: ny,
-        vx: dx * CFG.BULLET_SPEED + p.dir * Math.cos(pr) * p.speed,
+        vx: dx * (CFG.BULLET_SPEED + p.speed),
         vy: dy * CFG.BULLET_SPEED,
         life: CFG.BULLET_LIFE,
         from: "player",
@@ -671,10 +695,13 @@
         p.bombCd = CFG.BOMB_COOLDOWN;
         p.bombs--;
         const pr = p.pitch * DEG;
+        // release from whichever side faces the ground: the belly when upright,
+        // the pilot's cockpit when inverted. Then gravity takes it.
+        const rel = planeDownPoint(p);
         bombs.push({
-          x: p.x,
-          y: p.y + 8,
-          vx: p.dir * Math.cos(pr) * p.speed * 0.8,
+          x: p.x + rel.wx,
+          y: p.y + rel.wy,
+          vx: Math.cos(pr) * p.speed * 0.8,
           vy: -Math.sin(pr) * p.speed * 0.5 + 20,
         });
       }
@@ -917,7 +944,8 @@
     flakTimer -= dt;
     if (flakTimer <= 0 && flak.length < 14) {
       flakTimer = rand(0.5, 1.6);
-      const ahead = player.dir * rand(120, 900);
+      const headX = Math.cos(player.pitch * DEG) >= 0 ? 1 : -1;
+      const ahead = headX * rand(120, 900);
       flak.push({
         x: player.x + ahead + rand(-400, 400),
         y: player.y + rand(-260, 120) - 80, // around/above the player, never underground
@@ -1585,9 +1613,9 @@
     const s = worldToScreen(player.x, player.y);
     const blink = player.invuln > 0 && Math.floor(now() * 16) % 2 === 0;
     if (!blink) {
-      const rotDir = player.bankX >= 0 ? 1 : -1; // pitch orientation follows the visible facing
-      const squash = 0.42 + 0.58 * Math.abs(player.bankX); // squash vertically mid-roll
-      drawPlane(s.x, s.y, player.pitch, rotDir, cam.zoom, false, player.hp, player.bankX, squash);
+      // flipX stays +1 (heading sets the facing); rollAnim is the vertical flip
+      // that rolls the plane upside-down/upright through a knife-edge at 0.
+      drawPlane(s.x, s.y, player.pitch, 1, cam.zoom, false, player.hp, 1, player.rollAnim);
     }
   }
 
