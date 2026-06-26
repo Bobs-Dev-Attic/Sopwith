@@ -8,7 +8,7 @@
   "use strict";
 
   /* Bump this on every update so the home screen shows the current build. */
-  const VERSION = "1.8.0";
+  const VERSION = "1.8.1";
 
   /* ------------------------------------------------------------------ *
    * Config / tuning
@@ -550,10 +550,15 @@
     const altNow = Math.max(0, -p.y);
     const altFactor = clamp(altNow / CFG.MAX_ALT, 0, 1);
 
-    // ---- flight stick: vertical = pitch, horizontal = flip the plane ----
-    // pitchCmd > 0 means "nose up". The stick's vertical axis is screen-down
-    // positive; inverting (the default) means pulling the stick down climbs.
-    const pitchCmd = (input.invert ? input.stickY : -input.stickY);
+    // ---- flight stick: vertical = pitch ----
+    // pitchCmd > 0 means "pull back" (toward the canopy). The stick's vertical
+    // axis is screen-down positive; inverting (the default) means pulling the
+    // stick down pulls back. The plane's roll orientation flips which way "back"
+    // rotates the heading: when you're rolled belly-up, pulling back pitches the
+    // nose the other way (just like real inverted flight) — and that's exactly
+    // what makes the controls right again after a 180° loop + roll upright.
+    const rollSign = p.rollFlip >= 0 ? 1 : -1;
+    const pitchCmd = (input.invert ? input.stickY : -input.stickY) * rollSign;
     if (Math.abs(pitchCmd) > 0.04) {
       p.pitch += pitchCmd * CFG.PITCH_RATE * dt;
     } else if (Math.abs(p.pitch) < 45) {
