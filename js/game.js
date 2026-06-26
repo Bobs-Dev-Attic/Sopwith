@@ -8,7 +8,7 @@
   "use strict";
 
   /* Bump this on every update so the home screen shows the current build. */
-  const VERSION = "1.3.0";
+  const VERSION = "1.4.0";
 
   /* ------------------------------------------------------------------ *
    * Config / tuning
@@ -28,6 +28,9 @@
     CEILING_BAND: 380, // ft below MAX_ALT where climb authority fades out
     ENEMY_PITCH_MAX: 55, // enemies pitch hard but don't loop
     ENEMY_GRACE: 10, // seconds of clear sky before enemy planes show up
+    ENEMY_FIRE_RANGE: 640, // distance at which an attacker opens fire
+    SEP_RADIUS: 100, // start steering away from another plane within this distance
+    RAM_RADIUS: 85, // hard "don't ram the player" bubble
 
     // Camera: zoom is chosen to always frame the ground together with the plane
     ZOOM_GROUND: 1.7, // most zoomed-in (on the deck)
@@ -235,20 +238,25 @@
     }
   }
 
+  const ENEMY_PATTERNS = ["chaser", "strafer", "highdive"];
+
   function makeEnemy(x, alt) {
     return {
       x,
       y: -alt,
       pitch: 0,
-      vx: 0,
-      vy: 0,
+      speed: rand(140, 180),
       hp: 2,
-      speed: rand(130, 185),
       fireCd: rand(0.6, 2.0),
-      dir: -1, // facing left toward player by default
+      dir: -1,
       alive: true,
-      wobble: rand(0, TAU),
       kind: "fokker",
+      // --- AI / tactics ---
+      pattern: ENEMY_PATTERNS[randi(0, ENEMY_PATTERNS.length - 1)],
+      mode: "ingress", // ingress -> attack -> extend -> ingress ...
+      modeT: 0, // time left in the current mode
+      passSign: Math.random() < 0.5 ? 1 : -1, // which side of the player we slide past
+      lastDx: 0,
     };
   }
 
@@ -695,21 +703,76 @@
     const grace = missionState && missionState.grace > 0;
     for (const e of enemies) {
       if (!e.alive) continue;
-      const dy = player.y - e.y;
       const dx = player.x - e.x;
+      const dy = player.y - e.y;
+      const dist = Math.hypot(dx, dy);
       const ealt = Math.max(0, -e.y);
+      const palt = Math.max(0, -player.y);
+      e.modeT -= dt;
 
-      // --- AI picks control inputs (a desired pitch + throttle) ---
-      e.dir = dx < 0 ? -1 : 1; // turn to face the player
-      // aim the nose toward the player's altitude, then pull up if low
-      let desiredPitch = clamp(Math.atan2(-dy, Math.abs(dx) + 1) / DEG, -45, 45);
+      // -------- tactics: a small attack-pattern state machine --------
+      // Each pilot runs an ingress -> firing pass -> extend/reposition cycle,
+      // flavoured by its pattern, instead of just pointing at the player.
+      const above = e.pattern === "highdive" ? 300 : e.pattern === "strafer" ? 60 : 0;
+      let targetAlt;
+      let wantDir = dx < 0 ? -1 : 1; // face the player by default
+      let thr = 0.82;
+
+      if (e.mode === "ingress") {
+        // close in and set up co-altitude (or above, for a diver)
+        targetAlt = palt + above;
+        if (dist < CFG.ENEMY_FIRE_RANGE && Math.abs(palt - ealt) < 130) {
+          e.mode = "attack";
+          e.modeT = rand(1.1, 2.0);
+        }
+      } else if (e.mode === "attack") {
+        // a committed firing pass, sliding just above/below so we don't ram
+        targetAlt = palt + e.passSign * 38;
+        thr = 0.97; // pour on speed for the pass
+        const overshot = Math.sign(dx) !== Math.sign(e.lastDx) && e.lastDx !== 0;
+        if (e.modeT <= 0 || overshot) {
+          e.mode = "extend";
+          e.modeT = rand(1.3, 2.3);
+          e.passSign = -e.passSign; // come back on the other side next time
+        }
+      } else {
+        // extend: blow through, gain separation, then climb back for another go
+        wantDir = dx < 0 ? 1 : -1; // fly AWAY from the player
+        targetAlt = palt + (e.pattern === "highdive" ? 360 : 150);
+        thr = 0.9;
+        if (e.modeT <= 0 && dist > 540) e.mode = "ingress";
+      }
+      e.lastDx = dx;
+      targetAlt = Math.max(targetAlt, 150); // stay off the deck
+
+      // -------- separation: avoid other planes, and never ram the player --------
+      let sepY = 0;
+      let crowdedAhead = false;
+      for (const o of enemies) {
+        if (o === e || !o.alive) continue;
+        const od = Math.hypot(o.x - e.x, o.y - e.y);
+        if (od > 0 && od < CFG.SEP_RADIUS) {
+          sepY += Math.sign(e.y - o.y || 1) * (CFG.SEP_RADIUS - od);
+          if (Math.sign(o.x - e.x) === wantDir && Math.abs(o.x - e.x) < CFG.SEP_RADIUS * 0.7)
+            crowdedAhead = true;
+        }
+      }
+      if (dist < CFG.RAM_RADIUS) {
+        // peel away from the player rather than colliding
+        sepY += Math.sign(e.y - player.y || 1) * (CFG.RAM_RADIUS - dist) * 1.7;
+        if (Math.sign(dx) === wantDir) crowdedAhead = true;
+      }
+      targetAlt += -sepY * 0.5; // sepY > 0 pushes the plane downward (away)
+      if (crowdedAhead) thr *= 0.7; // ease off if someone's right in front
+
+      // -------- convert the desired altitude into a stick input --------
+      const vErr = -targetAlt - e.y; // +ve => need to descend
+      let desiredPitch = clamp(Math.atan2(-vErr, 150) / DEG, -CFG.ENEMY_PITCH_MAX, CFG.ENEMY_PITCH_MAX);
       if (ealt < 160) desiredPitch = Math.max(desiredPitch, ((160 - ealt) / 160) * 35);
-      desiredPitch = clamp(desiredPitch, -CFG.ENEMY_PITCH_MAX, CFG.ENEMY_PITCH_MAX);
-      // pitch toward the target no faster than a real stick would allow
+      e.dir = wantDir;
       e.pitch += clamp(desiredPitch - e.pitch, -CFG.PITCH_RATE * dt, CFG.PITCH_RATE * dt);
-      const thr = 0.78;
 
-      // --- same flight physics as the player: throttle, stall sag, drag, ceiling ---
+      // -------- flight physics (identical model to the player) --------
       const altF = clamp(ealt / CFG.MAX_ALT, 0, 1);
       const tgt = CFG.STALL_SPEED + thr * (CFG.MAX_SPEED - CFG.STALL_SPEED) * (1 - CFG.POWER_FADE * altF);
       e.speed += (tgt - e.speed) * clamp(CFG.SPEED_EASE * dt, 0, 1);
@@ -723,16 +786,18 @@
       if (vy < 0) vy *= clamp((CFG.MAX_ALT - ealt) / CFG.CEILING_BAND, 0, 1); // soft ceiling
       e.x += vx * dt;
       e.y += vy * dt;
-      if (-e.y < 22) { // skim the deck instead of crashing
+      if (-e.y < 22) {
         e.y = -22;
         if (e.pitch < 0) e.pitch = 0;
       }
 
-      // fire at player when roughly aligned and in front (not during the grace period)
+      // -------- guns: only on a committed pass, lined up, after grace --------
       e.fireCd -= dt;
-      const aligned = !grace && Math.abs(dy) < 60 && Math.abs(dx) < 700 && Math.sign(dx) === e.dir;
+      const aligned =
+        !grace && e.mode === "attack" &&
+        Math.abs(dy) < 70 && Math.abs(dx) < CFG.ENEMY_FIRE_RANGE && Math.sign(dx) === e.dir;
       if (e.fireCd <= 0 && aligned) {
-        e.fireCd = rand(0.8, 1.8);
+        e.fireCd = rand(0.16, 0.26); // a short burst during the pass
         const ang = Math.atan2(player.y - e.y, player.x - e.x);
         bullets.push({
           x: e.x + e.dir * 18,
@@ -744,14 +809,14 @@
         });
       }
 
-      // collision with player
-      if (player.invuln <= 0 && Math.hypot(e.x - player.x, e.y - player.y) < 30) {
+      // collision with player (a last resort — they actively try to avoid it)
+      if (player.invuln <= 0 && dist < 30) {
         damagePlayer(45, true);
         killEnemy(e);
       }
 
-      // cull far behind
-      if (Math.abs(e.x - player.x) > 3200) e.alive = false;
+      // cull only when far behind AND extending away (so they can loop back to re-engage)
+      if (Math.abs(e.x - player.x) > 3400) e.alive = false;
     }
     enemies = enemies.filter((e) => e.alive);
   }
@@ -1391,6 +1456,16 @@
   // stamp the current version onto the home screen
   const versionEl = document.getElementById("version");
   if (versionEl) versionEl.textContent = "v" + VERSION;
+
+  // optional inspection hook for automated tests / debugging (?debug=1)
+  if (new URLSearchParams(location.search).get("debug")) {
+    window.__SOPWITH = {
+      get player() { return player; },
+      get enemies() { return enemies; },
+      get state() { return state; },
+      get mission() { return mission; },
+    };
+  }
 
   // start on menu (or jump straight into a mission via ?mission=N for replay/testing)
   const mq = parseInt(new URLSearchParams(location.search).get("mission"), 10);
