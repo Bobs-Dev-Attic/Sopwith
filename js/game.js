@@ -8,7 +8,7 @@
   "use strict";
 
   /* Bump this on every update so the home screen shows the current build. */
-  const VERSION = "1.6.0";
+  const VERSION = "1.7.0";
 
   /* ------------------------------------------------------------------ *
    * Config / tuning
@@ -26,6 +26,7 @@
     DRAG: 30, // speed bleed that grows with altitude (thin air)
     POWER_FADE: 0.55, // fraction of engine thrust lost at the ceiling
     CEILING_BAND: 380, // ft below MAX_ALT where climb authority fades out
+    TURN_RATE: 5.5, // how fast the plane banks around when reversing direction
     ENEMY_PITCH_MAX: 55, // enemies pitch hard but don't loop
     ENEMY_SPEED_SCALE: 0.82, // enemies fly a bit slower than the player
     ENEMY_GRACE: 10, // seconds of clear sky before enemy planes show up
@@ -236,7 +237,8 @@
     x: 0,
     y: -40,
     pitch: 0,
-    dir: 1, // facing direction: +1 right, -1 left
+    dir: 1, // committed facing direction: +1 right, -1 left
+    bankX: 1, // animated horizontal scale (-1..1): banks through 0 when turning
     speed: CFG.CRUISE_SPEED,
     hp: CFG.PLAYER_HP,
     alive: true,
@@ -254,6 +256,8 @@
   let particles = [];
   let clouds = [];
   let hills = [];
+  let flak = []; // ambient anti-aircraft bursts in the sky {x,y,t,life,r}
+  let flakTimer = 2;
 
   let score = 0;
 
@@ -455,6 +459,8 @@
     enemies = [];
     targets = [];
     particles = [];
+    flak = [];
+    flakTimer = 2;
     missionProgress = 0;
     missionState = { spawned: 0, grace: CFG.ENEMY_GRACE };
 
@@ -463,6 +469,7 @@
     player.y = -8;
     player.pitch = 0;
     player.dir = 1;
+    player.bankX = 1;
     player.speed = CFG.STALL_SPEED + 20;
     player.hp = CFG.PLAYER_HP;
     player.alive = true;
@@ -520,6 +527,7 @@
     updateTargets(dt);
     updateBombs(dt);
     updateParticles(dt);
+    updateFlak(dt);
     updateCamera(dt);
 
     mission.tick(missionState);
@@ -554,9 +562,13 @@
     p.pitch = normDeg(p.pitch); // wrap so the nose can swing all the way around
     const pr = p.pitch * DEG;
 
-    // push the stick left/right to turn the plane to face that way
+    // push the stick left/right to roll into a banking turn (the plane rotates
+    // about its long axis and comes around to the new heading — it doesn't just
+    // mirror). bankX animates from the old facing through 0 (knife-edge) to the
+    // new one; the renderer squashes it vertically through the roll.
     if (input.stickX > 0.5) p.dir = 1;
     else if (input.stickX < -0.5) p.dir = -1;
+    p.bankX += (p.dir - p.bankX) * clamp(CFG.TURN_RATE * dt, 0, 1);
 
     // ---- speed from throttle, with altitude power-fade + drag ----
     const powerScale = 1 - CFG.POWER_FADE * altFactor; // thinner air, less thrust
@@ -900,6 +912,81 @@
     particles = particles.filter((p) => p.life > 0);
   }
 
+  // Ambient flak: distant anti-aircraft bursts pepper the sky for atmosphere.
+  function updateFlak(dt) {
+    flakTimer -= dt;
+    if (flakTimer <= 0 && flak.length < 14) {
+      flakTimer = rand(0.5, 1.6);
+      const ahead = player.dir * rand(120, 900);
+      flak.push({
+        x: player.x + ahead + rand(-400, 400),
+        y: player.y + rand(-260, 120) - 80, // around/above the player, never underground
+        t: 0,
+        life: rand(1.8, 3.2),
+        r: rand(7, 13),
+      });
+    }
+    for (const f of flak) {
+      f.t += dt;
+      f.y -= 6 * dt; // smoke drifts up
+    }
+    flak = flak.filter((f) => f.t < f.life && -f.y > 10);
+  }
+
+  function drawFlak() {
+    for (const f of flak) {
+      const s = worldToScreen(f.x, f.y);
+      const z = cam.zoom;
+      const k = f.t / f.life;
+      if (f.t < 0.09) {
+        // initial burst flash
+        ctx.fillStyle = "rgba(255,236,180,0.9)";
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, (f.r + 3) * z, 0, TAU);
+        ctx.fill();
+      }
+      // dark smoke puff, expanding and fading
+      const rr = f.r * (0.5 + k * 1.4) * z;
+      ctx.fillStyle = `rgba(28,26,28,${0.5 * (1 - k)})`;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, rr, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = `rgba(12,12,14,${0.4 * (1 - k)})`;
+      ctx.beginPath();
+      ctx.arc(s.x - rr * 0.2, s.y + rr * 0.1, rr * 0.6, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  // A drifting smog haze and a dark vignette to seat the gloomy mood.
+  function drawAtmosphere() {
+    // overall darkening toward a smoky teal
+    ctx.fillStyle = "rgba(18,22,24,0.16)";
+    ctx.fillRect(0, 0, VW, VH);
+
+    // slow horizontal haze bands
+    const T = now();
+    ctx.save();
+    for (let i = 0; i < 3; i++) {
+      const y = VH * (0.3 + i * 0.22) + Math.sin(T * 0.1 + i) * 10;
+      const h = VH * 0.22;
+      const gr = ctx.createLinearGradient(0, y - h, 0, y + h);
+      gr.addColorStop(0, "rgba(120,120,124,0)");
+      gr.addColorStop(0.5, `rgba(120,120,124,${0.05 + i * 0.015})`);
+      gr.addColorStop(1, "rgba(120,120,124,0)");
+      ctx.fillStyle = gr;
+      ctx.fillRect(0, y - h, VW, h * 2);
+    }
+    ctx.restore();
+
+    // vignette
+    const v = ctx.createRadialGradient(VW * 0.5, VH * 0.46, VH * 0.3, VW * 0.5, VH * 0.5, VH * 0.85);
+    v.addColorStop(0, "rgba(0,0,0,0)");
+    v.addColorStop(1, "rgba(6,8,10,0.42)");
+    ctx.fillStyle = v;
+    ctx.fillRect(0, 0, VW, VH);
+  }
+
   function killEnemy(e) {
     if (!e.alive) return;
     e.alive = false;
@@ -942,11 +1029,13 @@
     drawBattlefield();
     drawTargets();
     drawBombs();
+    drawFlak();
     drawEnemies();
     if (player.alive || (Math.floor(now() * 10) % 2 === 0))
       drawPlayer();
     drawBullets();
     drawParticles();
+    drawAtmosphere();
     if (state === STATE.PLAY) updateHUD(alt);
   }
 
@@ -956,48 +1045,56 @@
     const t = clamp(alt / CFG.MAX_ALT, 0, 1);
     const rgb = (r, g, b) => `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
     const g = ctx.createLinearGradient(0, 0, 0, VH);
-    // a hazy, overcast war sky: muted blue-grey up high, smoky warm glow near
-    // the horizon. Deepens as you climb.
-    g.addColorStop(0, rgb(lerp(96, 26, t), lerp(122, 56, t), lerp(150, 92, t)));
-    g.addColorStop(0.5, rgb(lerp(150, 92, t), lerp(164, 120, t), lerp(180, 150, t)));
-    g.addColorStop(0.8, rgb(lerp(206, 150, t), lerp(196, 150, t), lerp(182, 150, t)));
-    g.addColorStop(1, rgb(lerp(236, 158, t), lerp(202, 146, t), lerp(156, 120, t)));
+    // dark, overcast war sky: heavy grey, with a dim smoky band near the horizon
+    g.addColorStop(0, rgb(lerp(58, 16, t), lerp(66, 30, t), lerp(78, 48, t)));
+    g.addColorStop(0.5, rgb(lerp(96, 52, t), lerp(102, 66, t), lerp(110, 84, t)));
+    g.addColorStop(0.82, rgb(lerp(132, 92, t), lerp(126, 92, t), lerp(120, 96, t)));
+    g.addColorStop(1, rgb(lerp(150, 104, t), lerp(126, 92, t), lerp(98, 78, t)));
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, VW, VH);
 
+    // a heavy overcast cloud bank smothering the top of the sky
+    ctx.save();
+    const ob = ctx.createLinearGradient(0, 0, 0, VH * 0.5);
+    ob.addColorStop(0, "rgba(26,28,32,0.55)");
+    ob.addColorStop(1, "rgba(26,28,32,0)");
+    ctx.fillStyle = ob;
+    ctx.fillRect(0, 0, VW, VH * 0.5);
+    ctx.restore();
+
     const s = sunPos();
-    // soft sun glow
-    const rg = ctx.createRadialGradient(s.x, s.y, 4, s.x, s.y, VW * 0.55);
-    rg.addColorStop(0, `rgba(255,242,205,${0.6 * (1 - t * 0.5)})`);
-    rg.addColorStop(0.16, "rgba(255,228,170,0.22)");
-    rg.addColorStop(1, "rgba(255,228,170,0)");
+    // a dim sun smothered by smog — weak, hazy glow
+    const rg = ctx.createRadialGradient(s.x, s.y, 4, s.x, s.y, VW * 0.5);
+    rg.addColorStop(0, `rgba(232,210,168,${0.34 * (1 - t * 0.5)})`);
+    rg.addColorStop(0.18, "rgba(210,180,140,0.12)");
+    rg.addColorStop(1, "rgba(210,180,140,0)");
     ctx.fillStyle = rg;
     ctx.fillRect(0, 0, VW, VH);
 
-    // crepuscular "god rays" fanning down from the sun
+    // faint crepuscular rays cutting through the murk
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
-    const rays = 8;
+    const rays = 7;
     const drift = Math.sin(now() * 0.06) * 0.03;
     for (let i = 0; i < rays; i++) {
-      const ang = Math.PI * 0.52 + (i - rays / 2) * 0.15 + drift + (hash(i) - 0.5) * 0.05;
+      const ang = Math.PI * 0.52 + (i - rays / 2) * 0.16 + drift + (hash(i) - 0.5) * 0.05;
       const len = VH * 1.4;
-      const w = 0.045 + hash(i * 7) * 0.02;
+      const w = 0.04 + hash(i * 7) * 0.02;
       ctx.beginPath();
       ctx.moveTo(s.x, s.y);
       ctx.lineTo(s.x + Math.cos(ang - w) * len, s.y + Math.sin(ang - w) * len);
       ctx.lineTo(s.x + Math.cos(ang + w) * len, s.y + Math.sin(ang + w) * len);
       ctx.closePath();
-      ctx.fillStyle = `rgba(255,238,194,${0.05 * (1 - t * 0.6)})`;
+      ctx.fillStyle = `rgba(220,196,150,${0.03 * (1 - t * 0.6)})`;
       ctx.fill();
     }
     ctx.restore();
 
-    // wan sun disc
+    // wan, washed-out sun disc behind the haze
     ctx.save();
-    ctx.fillStyle = "rgba(255,248,222,0.95)";
+    ctx.fillStyle = "rgba(226,210,176,0.7)";
     ctx.beginPath();
-    ctx.arc(s.x, s.y, 30, 0, TAU);
+    ctx.arc(s.x, s.y, 26, 0, TAU);
     ctx.fill();
     ctx.restore();
   }
@@ -1047,18 +1144,19 @@
     const T = now();
     ctx.save();
     for (let c = Math.floor(left / spacing); c <= Math.ceil(right / spacing); c++) {
-      if (hash(c * 91 + 3) < 0.55) continue; // sparse
+      if (hash(c * 91 + 3) < 0.4) continue; // denser than before
       const wx = c * spacing + (hash(c * 7) - 0.5) * spacing * 0.7;
       const sx = (wx - cam.x) * par + VW * 0.4;
       if (sx < -120 || sx > VW + 120) continue;
-      const tall = (50 + hash(c * 23) * 90) * cam.zoom;
-      const puffs = 7;
+      const tall = (70 + hash(c * 23) * 130) * cam.zoom;
+      const puffs = 9;
       for (let i = 0; i < puffs; i++) {
         const f = i / puffs;
-        const drift = Math.sin(T * 0.3 + c + i * 0.5) * (6 + i * 2.2) * cam.zoom;
+        const drift = Math.sin(T * 0.3 + c + i * 0.5) * (6 + i * 2.6) * cam.zoom;
         const py = horizon - f * tall;
-        const pr = (4 + i * 2.4) * cam.zoom;
-        ctx.fillStyle = `rgba(${60 - i * 4},${58 - i * 4},${60 - i * 3},${0.30 * (1 - f)})`;
+        const pr = (4 + i * 2.6) * cam.zoom;
+        const shade = 30 - i * 2;
+        ctx.fillStyle = `rgba(${shade},${shade - 2},${shade},${0.42 * (1 - f * 0.85)})`;
         ctx.beginPath();
         ctx.arc(sx + drift, py, pr, 0, TAU);
         ctx.fill();
@@ -1127,11 +1225,11 @@
   function drawGround() {
     const horizon = worldToScreen(0, 0).y;
     if (horizon > VH) return;
-    // churned, war-worn field — green near the aerodrome, muddier downrange
+    // churned, war-worn field under an overcast sky — muddy olive, going dark
     const g = ctx.createLinearGradient(0, horizon, 0, VH);
-    g.addColorStop(0, "#6a9a48");
-    g.addColorStop(0.5, "#557e38");
-    g.addColorStop(1, "#3a5b2a");
+    g.addColorStop(0, "#4e6536");
+    g.addColorStop(0.5, "#3f522b");
+    g.addColorStop(1, "#283a1d");
     ctx.fillStyle = g;
     ctx.fillRect(0, horizon, VW, VH - horizon);
 
@@ -1208,11 +1306,12 @@
       const pick = hash(c * 101 + 7);
       ctx.save();
       ctx.translate(s.x, s.y);
-      if (pick < 0.26) fCrater(z, hash(c * 2));
-      else if (pick < 0.46) fTrench(z, hash(c * 9));
-      else if (pick < 0.66) fDeadTree(z, hash(c * 6), hash(c * 15));
-      else if (pick < 0.78) fWire(z);
-      else if (pick < 0.85) fFire(z, c, T);
+      if (pick < 0.22) fCrater(z, hash(c * 2));
+      else if (pick < 0.40) fTrench(z, hash(c * 9));
+      else if (pick < 0.57) fDeadTree(z, hash(c * 6), hash(c * 15));
+      else if (pick < 0.69) fWire(z);
+      else if (pick < 0.77) fFire(z, c, T);
+      else if (pick < 0.90) fPuddle(z, hash(c * 4));
       // else: bare, churned ground
       ctx.restore();
     }
@@ -1275,6 +1374,23 @@
       ctx.lineTo(lean * 0.5 + dir * (7 + seed * 6) * z, ly - (3 + seed * 4) * z);
       ctx.stroke();
     }
+  }
+
+  function fPuddle(z, seed) {
+    // muddy shell-hole water with a wan sky reflection
+    const w = (16 + seed * 26) * z;
+    ctx.fillStyle = "rgba(30,34,30,0.5)";
+    ctx.beginPath();
+    ctx.ellipse(0, 4 * z, w * 1.1, 5 * z, 0, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = "rgba(120,130,128,0.4)";
+    ctx.beginPath();
+    ctx.ellipse(0, 4 * z, w * 0.8, 3 * z, 0, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = "rgba(170,176,170,0.28)";
+    ctx.beginPath();
+    ctx.ellipse(-w * 0.2, 3.4 * z, w * 0.4, 1.4 * z, 0, 0, TAU);
+    ctx.fill();
   }
 
   function fWire(z) {
@@ -1468,7 +1584,11 @@
   function drawPlayer() {
     const s = worldToScreen(player.x, player.y);
     const blink = player.invuln > 0 && Math.floor(now() * 16) % 2 === 0;
-    if (!blink) drawPlane(s.x, s.y, player.pitch, player.dir, cam.zoom, false, player.hp);
+    if (!blink) {
+      const rotDir = player.bankX >= 0 ? 1 : -1; // pitch orientation follows the visible facing
+      const squash = 0.42 + 0.58 * Math.abs(player.bankX); // squash vertically mid-roll
+      drawPlane(s.x, s.y, player.pitch, rotDir, cam.zoom, false, player.hp, player.bankX, squash);
+    }
   }
 
   /* A detailed side-view biplane modelled on the Sopwith Camel B6313:
@@ -1476,10 +1596,12 @@
      blue/white/red striped rudder. Enemies reuse the shape in red with crosses.
      Drawn in fixed "model units"; the context is scaled by the camera zoom so
      line weights and detail scale naturally. Nose points +x (right). */
-  function drawPlane(sx, sy, pitchDeg, dir, zoom, enemy, hp) {
+  function drawPlane(sx, sy, pitchDeg, dir, zoom, enemy, hp, flipX, squashY) {
+    if (flipX === undefined) flipX = dir; // visual horizontal scale (banking turn)
+    if (squashY === undefined) squashY = 1; // vertical squash while rolling
     ctx.save();
     ctx.translate(sx, sy);
-    ctx.scale(dir, 1); // face left/right
+    ctx.scale(flipX, squashY); // face left/right + bank-through-zero on a turn
     ctx.rotate(-pitchDeg * DEG * dir); // pitch — any angle, so full loops read right
     const s = zoom * 0.9;
     ctx.scale(s, s);
