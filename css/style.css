@@ -1,0 +1,442 @@
+:root {
+  --ink: #e9f1f7;
+  --panel: #14222f;
+  --panel-2: #1d3245;
+  --accent: #ffce4a;
+  --accent-2: #ff7043;
+  --good: #6fce6f;
+  --bad: #e2554b;
+  --hud-bg: rgba(8, 16, 24, 0.45);
+  --btn: rgba(20, 34, 47, 0.62);
+  --btn-active: rgba(255, 206, 74, 0.85);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0a1119;
+  color: var(--ink);
+  font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+#game-root {
+  position: fixed;
+  inset: 0;
+}
+
+canvas#game {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #6db3d6;
+}
+
+.overlay-ui {
+  position: absolute;
+  z-index: 5;
+}
+
+/* ---------- HUD ---------- */
+#hud {
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  padding: calc(6px + env(safe-area-inset-top, 0px)) calc(12px + var(--safe-r)) 6px
+    calc(12px + var(--safe-l));
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-left,
+.hud-right {
+  background: var(--hud-bg);
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: clamp(11px, 2.4vh, 16px);
+  line-height: 1.5;
+  backdrop-filter: blur(2px);
+}
+
+.hud-right {
+  text-align: right;
+}
+
+.hud-center {
+  text-align: center;
+  background: var(--hud-bg);
+  padding: 6px 14px;
+  border-radius: 10px;
+  max-width: 46%;
+  margin-top: 34px; /* clear the pause button sitting above it */
+}
+
+.hud-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  justify-content: inherit;
+}
+
+.hud-right .hud-row {
+  justify-content: flex-end;
+}
+
+.hud-label {
+  color: var(--accent);
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  font-size: 0.8em;
+}
+
+.hud-unit {
+  opacity: 0.6;
+  font-size: 0.75em;
+}
+
+#hud-mission {
+  color: var(--accent);
+  font-weight: bold;
+  font-size: clamp(12px, 2.6vh, 17px);
+}
+
+#hud-objective {
+  font-size: clamp(10px, 2.2vh, 14px);
+  opacity: 0.9;
+}
+
+#health-bar {
+  width: 110px;
+  max-width: 30vw;
+  height: 9px;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 6px;
+  overflow: hidden;
+  margin: 3px 0 4px auto;
+}
+
+#health-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, var(--bad), var(--good));
+  transition: width 0.15s linear;
+}
+
+/* ---------- Controls ---------- */
+#controls {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 0 calc(14px + var(--safe-r)) calc(14px + var(--safe-b)) calc(14px + var(--safe-l));
+  pointer-events: none;
+}
+
+.pad {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  pointer-events: auto;
+}
+
+.pad-right {
+  align-items: flex-end;
+}
+
+.ctl-btn {
+  pointer-events: auto;
+  border: none;
+  color: var(--ink);
+  background: var(--btn);
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  width: clamp(56px, 11vh, 84px);
+  height: clamp(56px, 11vh, 84px);
+  font-size: clamp(22px, 4.4vh, 34px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(2px);
+  transition: transform 0.05s, background 0.05s;
+  touch-action: none;
+}
+
+.ctl-btn:active,
+.ctl-btn.pressed {
+  background: var(--btn-active);
+  color: #1a1207;
+  transform: scale(0.92);
+}
+
+.ctl-btn.weapon.fire.pressed,
+.ctl-btn.weapon.fire:active {
+  background: rgba(255, 112, 67, 0.9);
+  color: #1a1207;
+}
+
+.ctl-btn.weapon.bomb.pressed,
+.ctl-btn.weapon.bomb:active {
+  background: rgba(120, 180, 255, 0.9);
+}
+
+/* ---------- Throttle ---------- */
+.throttle {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: var(--hud-bg);
+  padding: 8px 6px;
+  border-radius: 14px;
+  height: clamp(150px, 34vh, 240px);
+  margin-bottom: 4px;
+}
+
+.throttle-cap {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+.throttle-slider {
+  -webkit-appearance: slider-vertical;
+  appearance: slider-vertical;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 34px;
+  height: 100%;
+  background: transparent;
+  touch-action: none;
+}
+
+/* Track + thumb styling (WebKit) */
+.throttle-slider::-webkit-slider-runnable-track {
+  width: 10px;
+  background: linear-gradient(to top, var(--accent-2), var(--accent));
+  border-radius: 8px;
+}
+.throttle-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 30px;
+  height: 22px;
+  margin-left: -10px;
+  border-radius: 7px;
+  background: #fff;
+  border: 2px solid var(--accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+/* Firefox */
+.throttle-slider::-moz-range-track {
+  width: 10px;
+  background: linear-gradient(to top, var(--accent-2), var(--accent));
+  border-radius: 8px;
+}
+.throttle-slider::-moz-range-thumb {
+  width: 28px;
+  height: 20px;
+  border-radius: 7px;
+  background: #fff;
+  border: 2px solid var(--accent);
+}
+
+/* ---------- Pause ---------- */
+#btn-pause {
+  top: calc(8px + env(safe-area-inset-top, 0px));
+  right: 50%;
+  transform: translateX(50%);
+  width: 40px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  background: var(--btn);
+  color: var(--ink);
+  letter-spacing: 2px;
+  font-weight: bold;
+  display: none;
+  pointer-events: auto;
+}
+
+/* ---------- Screens / menus ---------- */
+.screen {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: radial-gradient(circle at 50% 30%, rgba(20, 40, 60, 0.82), rgba(4, 8, 14, 0.94));
+  backdrop-filter: blur(3px);
+}
+
+.screen.hidden {
+  display: none;
+}
+
+.panel {
+  background: linear-gradient(160deg, var(--panel-2), var(--panel));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  padding: clamp(18px, 4vh, 34px) clamp(20px, 5vw, 44px);
+  text-align: center;
+  max-width: 540px;
+  width: 100%;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  max-height: 92vh;
+  overflow: auto;
+}
+
+.panel h1 {
+  margin: 0 0 4px;
+  font-size: clamp(30px, 8vh, 56px);
+  letter-spacing: 3px;
+  line-height: 0.95;
+  color: var(--accent);
+  text-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
+}
+
+.panel h1 span {
+  display: block;
+  color: var(--ink);
+  font-size: 0.62em;
+  letter-spacing: 8px;
+}
+
+.panel h2 {
+  margin: 0 0 12px;
+  color: var(--accent);
+  font-size: clamp(20px, 5vh, 30px);
+}
+
+.tagline {
+  opacity: 0.85;
+  margin: 0 0 22px;
+  font-size: clamp(12px, 2.6vh, 16px);
+}
+
+.big-btn {
+  display: inline-block;
+  margin: 8px auto 0;
+  padding: 14px 34px;
+  font-size: clamp(16px, 3.4vh, 22px);
+  font-weight: bold;
+  letter-spacing: 1.5px;
+  color: #1a1207;
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+  border: none;
+  border-radius: 40px;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(255, 140, 50, 0.35);
+  pointer-events: auto;
+}
+
+.big-btn:active {
+  transform: translateY(2px);
+}
+
+.link-btn {
+  display: block;
+  margin: 14px auto 0;
+  background: none;
+  border: none;
+  color: var(--ink);
+  opacity: 0.75;
+  text-decoration: underline;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.howto-list {
+  text-align: left;
+  line-height: 1.7;
+  font-size: clamp(12px, 2.4vh, 15px);
+  padding-left: 0;
+  list-style: none;
+}
+
+.howto-list li {
+  margin-bottom: 6px;
+}
+
+.key {
+  display: inline-block;
+  min-width: 60px;
+  margin-right: 8px;
+  padding: 1px 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: var(--accent);
+  font-weight: bold;
+  text-align: center;
+}
+
+.invert-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 16px;
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+/* ---------- Rotate overlay ---------- */
+#rotate-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: #0a1119;
+  text-align: center;
+  padding: 30px;
+}
+
+.rotate-icon {
+  font-size: 60px;
+  margin-bottom: 12px;
+  animation: rock 1.6s ease-in-out infinite;
+}
+
+@keyframes rock {
+  0%, 100% { transform: rotate(-12deg); }
+  50% { transform: rotate(12deg); }
+}
+
+/* Show rotate prompt only on small portrait screens (phones) */
+@media (orientation: portrait) and (max-width: 920px) {
+  #rotate-overlay {
+    display: flex;
+  }
+  #game-root {
+    display: none;
+  }
+}

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+  />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#1b2a3a" />
+  <title>Sopwith Camel — WWI Flying Ace</title>
+  <link
+    rel="icon"
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231b2a3a'/%3E%3Crect x='5' y='14' width='22' height='3' fill='%23ffce4a'/%3E%3Crect x='8' y='9' width='16' height='3' fill='%23ffce4a'/%3E%3Crect x='12' y='12' width='9' height='3' fill='%236f7d3f'/%3E%3C/svg%3E"
+  />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <!-- Shown when the device is held in portrait -->
+  <div id="rotate-overlay">
+    <div class="rotate-inner">
+      <div class="rotate-icon">📱↻</div>
+      <p>Rotate your device to <strong>landscape</strong> to take to the skies.</p>
+    </div>
+  </div>
+
+  <div id="game-root">
+    <canvas id="game"></canvas>
+
+    <!-- Heads-up display -->
+    <div id="hud" class="overlay-ui">
+      <div class="hud-left">
+        <div class="hud-row"><span class="hud-label">ALT</span><span id="hud-alt">0</span><span class="hud-unit">ft</span></div>
+        <div class="hud-row"><span class="hud-label">SPD</span><span id="hud-spd">0</span><span class="hud-unit">mph</span></div>
+        <div class="hud-row"><span class="hud-label">SCORE</span><span id="hud-score">0</span></div>
+      </div>
+      <div class="hud-center">
+        <div id="hud-mission">Mission</div>
+        <div id="hud-objective">Objective</div>
+      </div>
+      <div class="hud-right">
+        <div class="hud-row"><span class="hud-label">HP</span></div>
+        <div id="health-bar"><div id="health-fill"></div></div>
+        <div class="hud-row"><span class="hud-label">BOMBS</span><span id="hud-bombs">0</span></div>
+      </div>
+    </div>
+
+    <!-- Touch controls -->
+    <div id="controls" class="overlay-ui">
+      <!-- Left side: pitch arrows -->
+      <div class="pad pad-left">
+        <button id="btn-up" class="ctl-btn arrow" aria-label="Climb">▲</button>
+        <button id="btn-down" class="ctl-btn arrow" aria-label="Dive">▼</button>
+      </div>
+
+      <!-- Middle: throttle slider -->
+      <div class="throttle">
+        <span class="throttle-cap throttle-top">MAX</span>
+        <input id="throttle" class="throttle-slider" type="range" min="0" max="100" value="55"
+               orient="vertical" aria-label="Throttle" />
+        <span class="throttle-cap throttle-bot">IDLE</span>
+      </div>
+
+      <!-- Right side: weapon buttons -->
+      <div class="pad pad-right">
+        <button id="btn-bomb" class="ctl-btn weapon bomb" aria-label="Drop bomb">💣</button>
+        <button id="btn-fire" class="ctl-btn weapon fire" aria-label="Fire guns">🔫</button>
+      </div>
+    </div>
+
+    <!-- Pause button -->
+    <button id="btn-pause" class="overlay-ui" aria-label="Pause">II</button>
+
+    <!-- Menus / dialogs -->
+    <div id="menu" class="screen">
+      <div class="panel">
+        <h1>SOPWITH<span>CAMEL</span></h1>
+        <p class="tagline">WWI Flying Ace — dogfights &amp; bombing runs</p>
+        <button id="btn-start" class="big-btn">TAKE OFF</button>
+        <button id="btn-howto" class="link-btn">How to play</button>
+        <label class="invert-toggle">
+          <input type="checkbox" id="invert-pitch" />
+          Invert pitch controls
+        </label>
+      </div>
+    </div>
+
+    <div id="howto" class="screen hidden">
+      <div class="panel">
+        <h2>How to Play</h2>
+        <ul class="howto-list">
+          <li><span class="key">▲ / ▼</span> Pull up (climb) or nose down (dive)</li>
+          <li><span class="key">Throttle</span> Vertical slider sets your speed</li>
+          <li><span class="key">🔫</span> Fire your twin Vickers guns at enemy planes</li>
+          <li><span class="key">💣</span> Drop bombs on ground targets</li>
+          <li><span class="key">Altitude</span> Hug the ground and the camera zooms in; climb high and it zooms out</li>
+          <li><span class="key">Keyboard</span> ↑/↓ pitch, ←/→ throttle, Space fire, B bomb, P pause</li>
+        </ul>
+        <button id="btn-howto-back" class="big-btn">BACK</button>
+      </div>
+    </div>
+
+    <div id="pause-screen" class="screen hidden">
+      <div class="panel">
+        <h2>Paused</h2>
+        <button id="btn-resume" class="big-btn">RESUME</button>
+        <button id="btn-quit" class="link-btn">Quit to menu</button>
+      </div>
+    </div>
+
+    <div id="briefing" class="screen hidden">
+      <div class="panel">
+        <h2 id="brief-title">Mission</h2>
+        <p id="brief-text">Briefing</p>
+        <button id="btn-brief-go" class="big-btn">GO</button>
+      </div>
+    </div>
+
+    <div id="result" class="screen hidden">
+      <div class="panel">
+        <h2 id="result-title">Mission Complete</h2>
+        <p id="result-text"></p>
+        <button id="btn-result-next" class="big-btn">CONTINUE</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/game.js"></script>
+</body>
+</html>
