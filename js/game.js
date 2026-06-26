@@ -8,7 +8,7 @@
   "use strict";
 
   /* Bump this on every update so the home screen shows the current build. */
-  const VERSION = "1.1.0";
+  const VERSION = "1.2.0";
 
   /* ------------------------------------------------------------------ *
    * Config / tuning
@@ -26,13 +26,15 @@
     DRAG: 30, // speed bleed that grows with altitude (thin air)
     POWER_FADE: 0.55, // fraction of engine thrust lost at the ceiling
     CEILING_BAND: 380, // ft below MAX_ALT where climb authority fades out
+    ENEMY_PITCH_MAX: 55, // enemies pitch hard but don't loop
+    ENEMY_GRACE: 10, // seconds of clear sky before enemy planes show up
 
-    // Altitude -> zoom mapping
-    ZOOM_GROUND: 1.7,
-    ZOOM_SKY: 0.34, // more zoomed out at altitude -> more of the scene visible
-    ZOOM_ALT_RANGE: 1500, // alt at which we reach full zoom-out
+    // Camera: zoom is chosen to always frame the ground together with the plane
+    ZOOM_GROUND: 1.7, // most zoomed-in (on the deck)
+    ZOOM_MIN: 0.14, // most zoomed-out (keeps the ground in view up high)
+    VIEW_ALT_SPAN: 1.3, // world units of vertical view added per ft of altitude
     ZOOM_EASE: 2.4,
-    MAX_ALT: 2400,
+    MAX_ALT: 1800,
 
     // Weapons
     FIRE_RATE: 0.11, // sec between bullets
@@ -329,14 +331,14 @@
       goal: 4,
       bombs: 0,
       setup() {
-        for (let i = 0; i < 3; i++)
-          enemies.push(makeEnemy(player.x + rand(700, 1500), rand(300, 700)));
+        // No enemies at the start — they arrive after the grace period so you
+        // have time to take off and climb.
       },
       tick(s) {
-        // keep ~3 enemies in the air until the goal's worth has spawned
-        if (s.spawned < this.goal && enemies.length < 3 && Math.random() < 0.012) {
-          enemies.push(makeEnemy(player.x + rand(900, 1600) * (Math.random() < 0.5 ? 1 : -1), rand(300, 800)));
-          s.spawned++;
+        if (s.grace > 0) return;
+        // trickle enemies in (from ahead) until you've shot down enough
+        if (missionProgress < this.goal && enemies.length < 3 && Math.random() < 0.02) {
+          enemies.push(makeEnemy(player.x + (Math.random() < 0.5 ? 1 : -1) * rand(1100, 1700), rand(350, 800)));
         }
       },
     },
@@ -365,18 +367,19 @@
       goal: 8,
       bombs: 14,
       setup() {
+        // Ground targets are placed up ahead; enemy planes hold off until the
+        // grace period ends.
         let x = player.x + 800;
         const types = ["truck", "aa", "depot", "hangar", "aa", "tent"];
         for (let i = 0; i < 7; i++) {
           targets.push(makeTarget(x, types[i % types.length]));
           x += rand(320, 560);
         }
-        for (let i = 0; i < 3; i++)
-          enemies.push(makeEnemy(player.x + rand(700, 1600), rand(300, 800)));
       },
       tick(s) {
-        if (enemies.length < 3 && Math.random() < 0.01) {
-          enemies.push(makeEnemy(player.x + rand(900, 1700) * (Math.random() < 0.5 ? 1 : -1), rand(300, 850)));
+        if (s.grace > 0) return;
+        if (enemies.length < 3 && Math.random() < 0.012) {
+          enemies.push(makeEnemy(player.x + (Math.random() < 0.5 ? 1 : -1) * rand(1000, 1700), rand(300, 850)));
         }
       },
     },
@@ -403,7 +406,7 @@
     targets = [];
     particles = [];
     missionProgress = 0;
-    missionState = { spawned: 0 };
+    missionState = { spawned: 0, grace: CFG.ENEMY_GRACE };
 
     // reset player on the runway
     player.x = 0;
@@ -457,6 +460,8 @@
    * ------------------------------------------------------------------ */
   function update(dt) {
     if (state !== STATE.PLAY) return;
+
+    if (missionState.grace > 0) missionState.grace -= dt;
 
     updatePlayer(dt);
     updateWeapons(dt);
@@ -557,21 +562,24 @@
 
   function updateCamera(dt) {
     const alt = Math.max(0, -player.y);
-    const t = clamp(alt / CFG.ZOOM_ALT_RANGE, 0, 1);
-    // ease-out so the zoom change feels smooth near the ground
-    const targetZoom = lerp(CFG.ZOOM_GROUND, CFG.ZOOM_SKY, Math.pow(t, 0.75));
+
+    // Choose a zoom that fits the ground line and the plane in the viewport at
+    // the same time: the higher you climb, the more vertical world we show, so
+    // the ground stays visible no matter the altitude.
+    const span = Math.max(VH / CFG.ZOOM_GROUND, alt * CFG.VIEW_ALT_SPAN + VH * 0.4);
+    const targetZoom = clamp(VH / span, CFG.ZOOM_MIN, CFG.ZOOM_GROUND);
     cam.zoom += (targetZoom - cam.zoom) * clamp(CFG.ZOOM_EASE * dt, 0, 1);
 
     // follow player, look a little ahead in the direction of travel
     const lookAhead = clamp(player.speed * 0.5, 0, 180);
     const tx = player.x + (player.speed >= 0 ? lookAhead : -lookAhead);
-    const ty = player.y - 40;
     cam.x += (tx - cam.x) * clamp(6 * dt, 0, 1);
-    cam.y += (ty - cam.y) * clamp(5 * dt, 0, 1);
 
-    // keep some ground visible: don't let camera drop too far below horizon
-    const maxCamY = 120;
-    if (cam.y > maxCamY) cam.y = maxCamY;
+    // Vertically sit the camera between the plane and the ground (worldY 0),
+    // biased slightly toward the plane so there's sky to climb into. This keeps
+    // both the aircraft and the ground on screen together.
+    const ty = player.y * 0.5 - 20;
+    cam.y += (ty - cam.y) * clamp(4 * dt, 0, 1);
   }
 
   function updateWeapons(dt) {
@@ -683,25 +691,45 @@
   }
 
   function updateEnemies(dt) {
+    const grace = missionState && missionState.grace > 0;
     for (const e of enemies) {
       if (!e.alive) continue;
-      e.wobble += dt * 2;
-      // simple AI: match the player's altitude, drift toward them horizontally
       const dy = player.y - e.y;
       const dx = player.x - e.x;
-      const desiredPitch = clamp(Math.atan2(-dy, Math.abs(dx) + 1) / DEG, -35, 35);
-      e.pitch += (desiredPitch - e.pitch) * clamp(2 * dt, 0, 1);
-      e.dir = dx < 0 ? -1 : 1;
+      const ealt = Math.max(0, -e.y);
+
+      // --- AI picks control inputs (a desired pitch + throttle) ---
+      e.dir = dx < 0 ? -1 : 1; // turn to face the player
+      // aim the nose toward the player's altitude, then pull up if low
+      let desiredPitch = clamp(Math.atan2(-dy, Math.abs(dx) + 1) / DEG, -45, 45);
+      if (ealt < 160) desiredPitch = Math.max(desiredPitch, ((160 - ealt) / 160) * 35);
+      desiredPitch = clamp(desiredPitch, -CFG.ENEMY_PITCH_MAX, CFG.ENEMY_PITCH_MAX);
+      // pitch toward the target no faster than a real stick would allow
+      e.pitch += clamp(desiredPitch - e.pitch, -CFG.PITCH_RATE * dt, CFG.PITCH_RATE * dt);
+      const thr = 0.78;
+
+      // --- same flight physics as the player: throttle, stall sag, drag, ceiling ---
+      const altF = clamp(ealt / CFG.MAX_ALT, 0, 1);
+      const tgt = CFG.STALL_SPEED + thr * (CFG.MAX_SPEED - CFG.STALL_SPEED) * (1 - CFG.POWER_FADE * altF);
+      e.speed += (tgt - e.speed) * clamp(CFG.SPEED_EASE * dt, 0, 1);
+      e.speed -= CFG.DRAG * altF * (e.speed / CFG.CRUISE_SPEED) * dt;
+      if (e.speed < 0) e.speed = 0;
 
       const pr = e.pitch * DEG;
-      const heading = e.dir;
-      e.x += heading * e.speed * Math.cos(pr) * dt;
-      e.y += -Math.sin(pr) * e.speed * dt + Math.sin(e.wobble) * 6 * dt;
-      if (-e.y < 30) e.y = -30; // don't fly into the dirt
+      let vx = e.dir * e.speed * Math.cos(pr);
+      let vy = -e.speed * Math.sin(pr);
+      vy += CFG.GRAVITY * Math.max(0, 1 - e.speed / CFG.CRUISE_SPEED); // stall sag
+      if (vy < 0) vy *= clamp((CFG.MAX_ALT - ealt) / CFG.CEILING_BAND, 0, 1); // soft ceiling
+      e.x += vx * dt;
+      e.y += vy * dt;
+      if (-e.y < 22) { // skim the deck instead of crashing
+        e.y = -22;
+        if (e.pitch < 0) e.pitch = 0;
+      }
 
-      // fire at player when roughly aligned and in front
+      // fire at player when roughly aligned and in front (not during the grace period)
       e.fireCd -= dt;
-      const aligned = Math.abs(dy) < 60 && Math.abs(dx) < 700 && Math.sign(dx) === e.dir;
+      const aligned = !grace && Math.abs(dy) < 60 && Math.abs(dx) < 700 && Math.sign(dx) === e.dir;
       if (e.fireCd <= 0 && aligned) {
         e.fireCd = rand(0.8, 1.8);
         const ang = Math.atan2(player.y - e.y, player.x - e.x);
@@ -728,12 +756,13 @@
   }
 
   function updateTargets(dt) {
+    const grace = missionState && missionState.grace > 0;
     for (const t of targets) {
       if (t.destroyed || !t.aa) continue;
       t.fireCd -= dt;
       const dx = player.x - t.x;
       const dist = Math.hypot(dx, player.y);
-      if (t.fireCd <= 0 && dist < 900 && -player.y > 20) {
+      if (!grace && t.fireCd <= 0 && dist < 900 && -player.y > 20) {
         t.fireCd = rand(1.4, 2.6);
         const ang = Math.atan2(player.y - -t.h, player.x - t.x);
         bullets.push({
