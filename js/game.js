@@ -8,7 +8,7 @@
   "use strict";
 
   /* Bump this on every update so the home screen shows the current build. */
-  const VERSION = "1.2.0";
+  const VERSION = "1.3.0";
 
   /* ------------------------------------------------------------------ *
    * Config / tuning
@@ -324,28 +324,9 @@
    * ------------------------------------------------------------------ */
   const MISSIONS = [
     {
-      title: "Mission 1 — Patrol",
+      title: "Mission 1 — Bombing Run",
       brief:
-        "Take off from the aerodrome and clear the skies. Shoot down 4 enemy Fokkers with your Vickers guns.",
-      type: "dogfight",
-      goal: 4,
-      bombs: 0,
-      setup() {
-        // No enemies at the start — they arrive after the grace period so you
-        // have time to take off and climb.
-      },
-      tick(s) {
-        if (s.grace > 0) return;
-        // trickle enemies in (from ahead) until you've shot down enough
-        if (missionProgress < this.goal && enemies.length < 3 && Math.random() < 0.02) {
-          enemies.push(makeEnemy(player.x + (Math.random() < 0.5 ? 1 : -1) * rand(1100, 1700), rand(350, 800)));
-        }
-      },
-    },
-    {
-      title: "Mission 2 — Bombing Run",
-      brief:
-        "Enemy supply line ahead. Fly low and drop bombs on 5 ground targets. Watch for anti-aircraft guns!",
+        "Take off and head for the enemy supply line. Fly low and drop bombs on 5 ground targets. Watch for anti-aircraft guns!",
       type: "bombing",
       goal: 5,
       bombs: 12,
@@ -358,6 +339,26 @@
         }
       },
       tick() {},
+    },
+    {
+      title: "Mission 2 — Duel",
+      brief:
+        "A lone enemy ace is hunting your patrol. One Camel, one Fokker — climb to meet him and shoot him down.",
+      type: "dogfight",
+      goal: 1,
+      bombs: 0,
+      setup() {
+        // The duelist arrives after the grace period (see tick).
+      },
+      tick(s) {
+        if (s.grace > 0) return;
+        // keep exactly one tough adversary in the air until he's downed
+        if (missionProgress < this.goal && enemies.length < 1) {
+          const ace = makeEnemy(player.x + (Math.random() < 0.5 ? 1 : -1) * rand(900, 1400), rand(400, 800));
+          ace.hp = 4; // an ace takes a few good bursts
+          enemies.push(ace);
+        }
+      },
     },
     {
       title: "Mission 3 — All-Out",
