@@ -8,7 +8,7 @@
   "use strict";
 
   /* Bump this on every update so the home screen shows the current build. */
-  const VERSION = "1.4.0";
+  const VERSION = "1.5.0";
 
   /* ------------------------------------------------------------------ *
    * Config / tuning
@@ -27,6 +27,7 @@
     POWER_FADE: 0.55, // fraction of engine thrust lost at the ceiling
     CEILING_BAND: 380, // ft below MAX_ALT where climb authority fades out
     ENEMY_PITCH_MAX: 55, // enemies pitch hard but don't loop
+    ENEMY_SPEED_SCALE: 0.82, // enemies fly a bit slower than the player
     ENEMY_GRACE: 10, // seconds of clear sky before enemy planes show up
     ENEMY_FIRE_RANGE: 640, // distance at which an attacker opens fire
     SEP_RADIUS: 100, // start steering away from another plane within this distance
@@ -95,13 +96,15 @@
    * Input
    * ------------------------------------------------------------------ */
   const input = {
-    pitchUp: false,
-    pitchDown: false,
+    stickX: 0, // analog flight stick: -1 (left) .. +1 (right) -> flips the plane
+    stickY: 0, // -1 (stick up) .. +1 (stick down) -> pitch (invert decides which climbs)
     firing: false,
     throttle: 0.55,
-    invert: true, // inverted (joystick-style: lower arrow pulls the nose up) by default
+    invert: true, // inverted (joystick-style: pull the stick down to climb) by default
     bombQueued: false,
   };
+  // separate keyboard axes so a held key and the touch stick don't clobber each other
+  let keyX = 0, keyY = 0;
 
   function bindHold(el, onDown, onUp) {
     if (!el) return;
@@ -121,22 +124,10 @@
     el.addEventListener("pointerleave", up);
   }
 
-  const btnUp = document.getElementById("btn-up");
-  const btnDown = document.getElementById("btn-down");
   const btnFire = document.getElementById("btn-fire");
   const btnBomb = document.getElementById("btn-bomb");
   const throttleEl = document.getElementById("throttle");
 
-  bindHold(
-    btnUp,
-    () => (input.pitchUp = true),
-    () => (input.pitchUp = false)
-  );
-  bindHold(
-    btnDown,
-    () => (input.pitchDown = true),
-    () => (input.pitchDown = false)
-  );
   bindHold(
     btnFire,
     () => (input.firing = true),
@@ -144,22 +135,63 @@
   );
   bindHold(btnBomb, () => (input.bombQueued = true), null);
 
+  // ---- analog flight stick ----
+  const stickEl = document.getElementById("stick");
+  const knobEl = document.getElementById("stick-knob");
+  let stickPid = null;
+
+  function setKnob(nx, ny) {
+    const travel = 30; // % of the base radius the knob visually moves
+    knobEl.style.transform = `translate(${nx * travel}%, ${ny * travel}%)`;
+  }
+  function moveStick(e) {
+    e.preventDefault();
+    const r = stickEl.getBoundingClientRect();
+    let dx = (e.clientX - (r.left + r.width / 2)) / (r.width / 2);
+    let dy = (e.clientY - (r.top + r.height / 2)) / (r.height / 2);
+    const m = Math.hypot(dx, dy);
+    if (m > 1) { dx /= m; dy /= m; } // clamp to the unit circle
+    input.stickX = dx;
+    input.stickY = dy;
+    setKnob(dx, dy);
+  }
+  function endStick(e) {
+    if (e.pointerId !== stickPid) return;
+    stickPid = null;
+    input.stickX = 0;
+    input.stickY = 0;
+    setKnob(0, 0);
+  }
+  stickEl.addEventListener("pointerdown", (e) => {
+    stickPid = e.pointerId;
+    stickEl.setPointerCapture(e.pointerId);
+    moveStick(e);
+  });
+  stickEl.addEventListener("pointermove", (e) => {
+    if (e.pointerId === stickPid) moveStick(e);
+  });
+  stickEl.addEventListener("pointerup", endStick);
+  stickEl.addEventListener("pointercancel", endStick);
+
   throttleEl.addEventListener("input", () => {
     input.throttle = throttleEl.value / 100;
   });
   input.throttle = throttleEl.value / 100;
 
-  // Keyboard (desktop testing / play)
+  // Keyboard (desktop testing / play) — arrows emulate the stick
+  function applyKeyAxes() { input.stickX = keyX; input.stickY = keyY; }
   window.addEventListener("keydown", (e) => {
     switch (e.key) {
-      case "ArrowUp": input.pitchUp = true; e.preventDefault(); break;
-      case "ArrowDown": input.pitchDown = true; e.preventDefault(); break;
-      case "ArrowRight":
+      case "ArrowUp": keyY = -1; applyKeyAxes(); e.preventDefault(); break;
+      case "ArrowDown": keyY = 1; applyKeyAxes(); e.preventDefault(); break;
+      case "ArrowLeft": keyX = -1; applyKeyAxes(); e.preventDefault(); break;
+      case "ArrowRight": keyX = 1; applyKeyAxes(); e.preventDefault(); break;
+      case "w": case "W":
         input.throttle = clamp(input.throttle + 0.08, 0, 1);
-        throttleEl.value = input.throttle * 100; e.preventDefault(); break;
-      case "ArrowLeft":
+        throttleEl.value = input.throttle * 100; break;
+      case "s": case "S":
         input.throttle = clamp(input.throttle - 0.08, 0, 1);
-        throttleEl.value = input.throttle * 100; e.preventDefault(); break;
+        throttleEl.value = input.throttle * 100; break;
       case " ": input.firing = true; e.preventDefault(); break;
       case "b": case "B": input.bombQueued = true; break;
       case "p": case "P": togglePause(); break;
@@ -167,8 +199,8 @@
   });
   window.addEventListener("keyup", (e) => {
     switch (e.key) {
-      case "ArrowUp": input.pitchUp = false; break;
-      case "ArrowDown": input.pitchDown = false; break;
+      case "ArrowUp": case "ArrowDown": keyY = 0; applyKeyAxes(); break;
+      case "ArrowLeft": case "ArrowRight": keyX = 0; applyKeyAxes(); break;
       case " ": input.firing = false; break;
     }
   });
@@ -196,6 +228,7 @@
     x: 0,
     y: -40,
     pitch: 0,
+    dir: 1, // facing direction: +1 right, -1 left
     speed: CFG.CRUISE_SPEED,
     hp: CFG.PLAYER_HP,
     alive: true,
@@ -421,6 +454,7 @@
     player.x = 0;
     player.y = -8;
     player.pitch = 0;
+    player.dir = 1;
     player.speed = CFG.STALL_SPEED + 20;
     player.hp = CFG.PLAYER_HP;
     player.alive = true;
@@ -498,24 +532,23 @@
     const altNow = Math.max(0, -p.y);
     const altFactor = clamp(altNow / CFG.MAX_ALT, 0, 1);
 
-    // ---- pitch control (full 360° loops allowed) ----
-    let up = input.pitchUp;
-    let down = input.pitchDown;
-    if (input.invert) {
-      const t = up; up = down; down = t;
-    }
-    if (up) p.pitch += CFG.PITCH_RATE * dt;
-    else if (down) p.pitch -= CFG.PITCH_RATE * dt;
-    else {
-      // gentle auto-level, but only near a level attitude so it never
-      // fights the pilot through the top of a loop
-      if (Math.abs(p.pitch) < 45) {
-        if (Math.abs(p.pitch) < CFG.AUTO_LEVEL * dt) p.pitch = 0;
-        else p.pitch -= Math.sign(p.pitch) * CFG.AUTO_LEVEL * dt;
-      }
+    // ---- flight stick: vertical = pitch, horizontal = flip the plane ----
+    // pitchCmd > 0 means "nose up". The stick's vertical axis is screen-down
+    // positive; inverting (the default) means pulling the stick down climbs.
+    const pitchCmd = (input.invert ? input.stickY : -input.stickY);
+    if (Math.abs(pitchCmd) > 0.04) {
+      p.pitch += pitchCmd * CFG.PITCH_RATE * dt;
+    } else if (Math.abs(p.pitch) < 45) {
+      // gentle auto-level near level (never fights you over the top of a loop)
+      if (Math.abs(p.pitch) < CFG.AUTO_LEVEL * dt) p.pitch = 0;
+      else p.pitch -= Math.sign(p.pitch) * CFG.AUTO_LEVEL * dt;
     }
     p.pitch = normDeg(p.pitch); // wrap so the nose can swing all the way around
     const pr = p.pitch * DEG;
+
+    // push the stick left/right to turn the plane to face that way
+    if (input.stickX > 0.5) p.dir = 1;
+    else if (input.stickX < -0.5) p.dir = -1;
 
     // ---- speed from throttle, with altitude power-fade + drag ----
     const powerScale = 1 - CFG.POWER_FADE * altFactor; // thinner air, less thrust
@@ -525,8 +558,8 @@
     p.speed -= CFG.DRAG * altFactor * (p.speed / CFG.CRUISE_SPEED) * dt;
     if (p.speed < 0) p.speed = 0;
 
-    // ---- velocity ----
-    let vx = p.speed * Math.cos(pr);
+    // ---- velocity (travels in the direction the nose is facing) ----
+    let vx = p.dir * p.speed * Math.cos(pr);
     let vy = -p.speed * Math.sin(pr);
     // gravity sag when below cruise speed (stall)
     const sag = CFG.GRAVITY * Math.max(0, 1 - p.speed / CFG.CRUISE_SPEED);
@@ -579,9 +612,9 @@
     const targetZoom = clamp(VH / span, CFG.ZOOM_MIN, CFG.ZOOM_GROUND);
     cam.zoom += (targetZoom - cam.zoom) * clamp(CFG.ZOOM_EASE * dt, 0, 1);
 
-    // follow player, look a little ahead in the direction of travel
+    // follow player, look a little ahead in the direction the plane faces
     const lookAhead = clamp(player.speed * 0.5, 0, 180);
-    const tx = player.x + (player.speed >= 0 ? lookAhead : -lookAhead);
+    const tx = player.x + player.dir * lookAhead;
     cam.x += (tx - cam.x) * clamp(6 * dt, 0, 1);
 
     // Vertically sit the camera between the plane and the ground (worldY 0),
@@ -599,11 +632,12 @@
     if (input.firing && p.fireCd <= 0 && p.alive) {
       p.fireCd = CFG.FIRE_RATE;
       const pr = p.pitch * DEG;
-      const dx = Math.cos(pr), dy = -Math.sin(pr);
+      // guns fire along the nose, in the direction the plane is facing
+      const dx = p.dir * Math.cos(pr), dy = -Math.sin(pr);
       const nx = p.x + dx * 22, ny = p.y + dy * 22;
       bullets.push({
         x: nx, y: ny,
-        vx: dx * CFG.BULLET_SPEED + Math.cos(pr) * p.speed,
+        vx: dx * CFG.BULLET_SPEED + p.dir * Math.cos(pr) * p.speed,
         vy: dy * CFG.BULLET_SPEED,
         life: CFG.BULLET_LIFE,
         from: "player",
@@ -620,7 +654,7 @@
         bombs.push({
           x: p.x,
           y: p.y + 8,
-          vx: Math.cos(pr) * p.speed * 0.8,
+          vx: p.dir * Math.cos(pr) * p.speed * 0.8,
           vy: -Math.sin(pr) * p.speed * 0.5 + 20,
         });
       }
@@ -774,7 +808,7 @@
 
       // -------- flight physics (identical model to the player) --------
       const altF = clamp(ealt / CFG.MAX_ALT, 0, 1);
-      const tgt = CFG.STALL_SPEED + thr * (CFG.MAX_SPEED - CFG.STALL_SPEED) * (1 - CFG.POWER_FADE * altF);
+      const tgt = (CFG.STALL_SPEED + thr * (CFG.MAX_SPEED - CFG.STALL_SPEED) * (1 - CFG.POWER_FADE * altF)) * CFG.ENEMY_SPEED_SCALE;
       e.speed += (tgt - e.speed) * clamp(CFG.SPEED_EASE * dt, 0, 1);
       e.speed -= CFG.DRAG * altF * (e.speed / CFG.CRUISE_SPEED) * dt;
       if (e.speed < 0) e.speed = 0;
@@ -1169,7 +1203,7 @@
   function drawPlayer() {
     const s = worldToScreen(player.x, player.y);
     const blink = player.invuln > 0 && Math.floor(now() * 16) % 2 === 0;
-    if (!blink) drawPlane(s.x, s.y, player.pitch, 1, cam.zoom, false, player.hp);
+    if (!blink) drawPlane(s.x, s.y, player.pitch, player.dir, cam.zoom, false, player.hp);
   }
 
   /* A detailed side-view biplane modelled on the Sopwith Camel B6313:

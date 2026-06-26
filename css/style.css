@@ -167,6 +167,44 @@ canvas#game {
   align-items: flex-end;
 }
 
+/* ---------- Flight stick (analog joystick) ---------- */
+.stick {
+  pointer-events: auto;
+  position: relative;
+  width: clamp(120px, 26vh, 180px);
+  height: clamp(120px, 26vh, 180px);
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 42%, rgba(40, 58, 76, 0.6), rgba(12, 22, 32, 0.55));
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(2px);
+  touch-action: none;
+  user-select: none;
+}
+
+.stick-cross {
+  position: absolute;
+  inset: 12%;
+  border-radius: 50%;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.1)) center / 100% 1.5px no-repeat,
+    linear-gradient(rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.1)) center / 1.5px 100% no-repeat;
+}
+
+.stick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 38%;
+  height: 38%;
+  margin-left: -19%;
+  margin-top: -19%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #fbe49a, var(--accent) 55%, var(--accent-2));
+  border: 2px solid rgba(0, 0, 0, 0.25);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+  will-change: transform;
+}
+
 /* Weapons + power lever grouped on the right; the lever stays pinned to the
    right edge of the screen regardless of the in-game zoom level. */
 .right-cluster {

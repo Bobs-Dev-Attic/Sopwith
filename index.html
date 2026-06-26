@@ -48,10 +48,12 @@
 
     <!-- Touch controls -->
     <div id="controls" class="overlay-ui">
-      <!-- Left side: pitch arrows -->
+      <!-- Left side: analog flight stick (up/down = pitch, left/right = flip) -->
       <div class="pad pad-left">
-        <button id="btn-up" class="ctl-btn arrow" aria-label="Pitch up">▲</button>
-        <button id="btn-down" class="ctl-btn arrow" aria-label="Pitch down">▼</button>
+        <div id="stick" class="stick" aria-label="Flight stick">
+          <div class="stick-cross" aria-hidden="true"></div>
+          <div id="stick-knob" class="stick-knob"></div>
+        </div>
       </div>
 
       <!-- Right side: weapon buttons, then the power lever pinned to the edge -->
@@ -92,13 +94,14 @@
       <div class="panel">
         <h2>How to Play</h2>
         <ul class="howto-list">
-          <li><span class="key">▲ / ▼</span> Pitch the nose — controls default to joystick-style (inverted): the lower arrow pulls up. Flip it on the menu.</li>
+          <li><span class="key">Stick ↕</span> Pitch the nose — defaults to joystick-style (inverted): pull the stick down to climb. Flip it on the menu.</li>
+          <li><span class="key">Stick ↔</span> Push left or right to turn the plane to face that way</li>
           <li><span class="key">Loops</span> Hold pitch all the way around for a full loop</li>
           <li><span class="key">Throttle</span> Power lever on the right sets your speed</li>
           <li><span class="key">🔫</span> Fire your twin Vickers guns at enemy planes</li>
           <li><span class="key">💣</span> Drop bombs on ground targets</li>
           <li><span class="key">Altitude</span> Hug the ground and the camera zooms in; climb high and it zooms out</li>
-          <li><span class="key">Keyboard</span> ↑/↓ pitch, ←/→ throttle, Space fire, B bomb, P pause</li>
+          <li><span class="key">Keyboard</span> Arrows = stick (↑/↓ pitch, ←/→ flip), W/S throttle, Space fire, B bomb, P pause</li>
         </ul>
         <button id="btn-howto-back" class="big-btn">BACK</button>
       </div>
